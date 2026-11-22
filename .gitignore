@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Expo / React Native
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build outputs
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+ios/Pods/
+ios/build/
+ios/.xcode.env.local
+*.xcworkspace
+
+# Testing / coverage
+coverage/
+*.lcov
+
+# Logs and caches
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+.cache/
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.jks
+*.keystore
+android/keystores/
+ios/*.mobileprovision
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
