@@ -1,43 +1,63 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Canvas, Circle, Group, Line, Rect } from '@shopify/react-native-skia';
-import { Direction } from '@/game/domain/value-objects/Transform';
-import { Vector2 } from '@/game/domain/value-objects/Vector2';
+import { Canvas, Circle, Group, Rect } from '@shopify/react-native-skia';
+import { RenderProjection } from '@/game/application/GameProjection';
+import { calculateVisibleTileBounds, worldToScreenPosition } from './CameraRenderer';
 
 export interface GameCanvasProps {
+  readonly projection: RenderProjection;
   readonly width: number;
   readonly height: number;
-  readonly playerPosition: Vector2;
-  readonly playerFacing: Direction;
-  readonly tileSize?: number;
 }
 
+// Color palette for data-driven tile types
+const TILE_COLORS: Record<number, string> = {
+  1: '#2A5528', // Grass
+  2: '#7F5539', // Dirt road
+  3: '#4A4E69', // Cobblestone plaza
+  4: '#1D3557', // Water
+  5: '#E63946', // Flower patch
+  6: '#1E3F20', // Bush
+  7: '#524B4B', // Wall / border stone
+};
+
 export const GameCanvas: React.FC<GameCanvasProps> = ({
+  projection,
   width,
   height,
-  playerPosition,
-  playerFacing,
-  tileSize = 32,
 }) => {
-  const cols = Math.ceil(width / tileSize);
-  const rows = Math.ceil(height / tileSize);
+  const { player, camera, map } = projection;
+  const tileSize = map.tileSize;
 
-  const tiles = useMemo(() => {
-    const list: Array<{ x: number; y: number; isAlt: boolean; isBorder: boolean }> = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const isBorder = r === 0 || c === 0 || r === rows - 1 || c === cols - 1;
-        const isAlt = (r + c) % 2 === 1;
-        list.push({ x: c * tileSize, y: r * tileSize, isAlt, isBorder });
-      }
-    }
-    return list;
-  }, [cols, rows, tileSize]);
+  const cameraState = useMemo(
+    () => ({
+      position: camera.position,
+      viewportWidth: width,
+      viewportHeight: height,
+    }),
+    [camera.position, width, height]
+  );
 
-  // Compute facing indicator offset
+  // Viewport culling: only calculate visible tile slice
+  const visibleBounds = useMemo(() => {
+    return calculateVisibleTileBounds(
+      cameraState,
+      tileSize,
+      map.widthInTiles,
+      map.heightInTiles,
+      1
+    );
+  }, [cameraState, tileSize, map.widthInTiles, map.heightInTiles]);
+
+  // Compute screen position of player
+  const playerScreenPos = useMemo(() => {
+    return worldToScreenPosition(player.position, cameraState);
+  }, [player.position, cameraState]);
+
+  // Facing indicator offset
   const facingOffset = useMemo(() => {
     const radius = 10;
-    switch (playerFacing) {
+    switch (player.facing) {
       case 'up':
         return { x: 0, y: -radius };
       case 'down':
@@ -47,70 +67,89 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       case 'right':
         return { x: radius, y: 0 };
     }
-  }, [playerFacing]);
+  }, [player.facing]);
+
+  // Generate visible tiles to render
+  const visibleTiles = useMemo(() => {
+    const result: Array<{
+      key: string;
+      x: number;
+      y: number;
+      color: string;
+      size: number;
+    }> = [];
+
+    const cameraLeft = cameraState.position.x - width / 2;
+    const cameraTop = cameraState.position.y - height / 2;
+
+    for (const layer of map.layers) {
+      if (!layer.visible) continue;
+
+      for (let r = visibleBounds.minRow; r <= visibleBounds.maxRow; r++) {
+        for (let c = visibleBounds.minCol; c <= visibleBounds.maxCol; c++) {
+          const tileIndex = r * map.widthInTiles + c;
+          const tileId = layer.data[tileIndex];
+          if (!tileId || tileId === 0) continue;
+
+          const color = TILE_COLORS[tileId] ?? '#333333';
+          const screenX = c * tileSize - cameraLeft;
+          const screenY = r * tileSize - cameraTop;
+
+          result.push({
+            key: `${layer.id}_${r}_${c}`,
+            x: screenX,
+            y: screenY,
+            color,
+            size: tileSize,
+          });
+        }
+      }
+    }
+    return result;
+  }, [map, visibleBounds, cameraState, width, height, tileSize]);
 
   return (
     <View style={[styles.container, { width, height }]}>
       <Canvas style={{ width, height }}>
-        {/* Background Dungeon Tiles */}
-        {tiles.map((tile, idx) => (
+        {/* Render visible map tiles */}
+        {visibleTiles.map((tile) => (
           <Rect
-            key={idx}
+            key={tile.key}
             x={tile.x}
             y={tile.y}
-            width={tileSize}
-            height={tileSize}
-            color={tile.isBorder ? '#1A1829' : tile.isAlt ? '#25213B' : '#2D2845'}
+            width={tile.size}
+            height={tile.size}
+            color={tile.color}
           />
         ))}
 
-        {/* Subtle Grid Lines */}
-        {Array.from({ length: cols + 1 }).map((_, i) => (
-          <Line
-            key={`vl-${i}`}
-            p1={{ x: i * tileSize, y: 0 }}
-            p2={{ x: i * tileSize, y: height }}
-            color="#383256"
-            strokeWidth={1}
-          />
-        ))}
-        {Array.from({ length: rows + 1 }).map((_, j) => (
-          <Line
-            key={`hl-${j}`}
-            p1={{ x: 0, y: j * tileSize }}
-            p2={{ x: width, y: j * tileSize }}
-            color="#383256"
-            strokeWidth={1}
-          />
-        ))}
-
-        {/* Placeholder Player Character */}
+        {/* Render player character */}
         <Group>
           {/* Shadow */}
           <Circle
-            cx={playerPosition.x}
-            cy={playerPosition.y + 10}
-            r={12}
+            cx={playerScreenPos.x}
+            cy={playerScreenPos.y + 11}
+            r={13}
             color="rgba(0, 0, 0, 0.45)"
           />
-          {/* Hero Body */}
+          {/* Hero body */}
           <Circle
-            cx={playerPosition.x}
-            cy={playerPosition.y}
-            r={12}
+            cx={playerScreenPos.x}
+            cy={playerScreenPos.y}
+            r={13}
             color="#E5A93C"
           />
-          {/* Hero Crest / Core */}
+          {/* Hero emblem */}
           <Circle
-            cx={playerPosition.x}
-            cy={playerPosition.y}
+            cx={playerScreenPos.x}
+            cy={playerScreenPos.y}
             r={7}
             color="#FAF0CA"
           />
-          {/* Facing Direction Indicator */}
+          {/* Facing indicator */}
           <Circle
-            cx={playerPosition.x + facingOffset.x}
-            cy={playerPosition.y + facingOffset.y}
+            cx={playerScreenPos.x + facingOffset.x}
+            cy={playerScreenPos.y + facingOffset.y}
             r={3.5}
             color="#9E2A2B"
           />
@@ -122,10 +161,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#12101E',
+    backgroundColor: '#0F171E',
     overflow: 'hidden',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#433D6B',
   },
 });
