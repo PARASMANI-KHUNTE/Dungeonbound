@@ -22,4 +22,6 @@ export interface GameSession {
   elapsedTimeSeconds: number;
   isPaused: boolean;
   eventQueue: DomainEvent[];
+  worldFlags: Record<string, boolean | number | string>;
+  questState: Record<string, unknown>;
 }

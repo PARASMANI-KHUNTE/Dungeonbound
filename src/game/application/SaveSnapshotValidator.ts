@@ -121,6 +121,29 @@ export function validateSaveSnapshot(
     }
   }
 
+  // 7. World flags and quest state
+  if (
+    !s.worldFlags ||
+    typeof s.worldFlags !== 'object' ||
+    Array.isArray(s.worldFlags)
+  ) {
+    errors.push('worldFlags must be a plain object');
+  } else {
+    for (const [key, value] of Object.entries(s.worldFlags)) {
+      const isPrimitive =
+        typeof value === 'boolean' ||
+        typeof value === 'string' ||
+        (typeof value === 'number' && Number.isFinite(value));
+      if (!isPrimitive) {
+        errors.push(`World flag "${key}" has an unsupported value`);
+      }
+    }
+  }
+
+  if (!s.questState || typeof s.questState !== 'object' || Array.isArray(s.questState)) {
+    errors.push('questState must be a plain object');
+  }
+
   return {
     valid: errors.length === 0,
     errors: Object.freeze(errors),

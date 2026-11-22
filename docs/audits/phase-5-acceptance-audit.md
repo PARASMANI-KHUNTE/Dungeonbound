@@ -1,9 +1,11 @@
 # Phase 5 Acceptance Criteria Audit
 
-**Target:** Phase 5 — Local persistence and save/load ([project.md](../../project.md#L1049-L1069))<br>
+**Target:** Phase 5 — Local persistence and save/load ([project.md](../../project.md#L1049-L1068))<br>
 **Audit Date:** 2026-11-22<br>
-**Branch:** `feat/phase-5-persistence-save-load`<br>
-**Status:** **All tasks PASS; all acceptance criteria PASS. Phase 5 is fully verified.**
+**Branch:** `fix/20-phase-5-persistence-audit-findings`<br>
+**Status:** **Criteria 1–3 PASS; criterion 4 UNVERIFIED. One listed task is PARTIAL (map-transition/checkpoint saves).**
+
+This audit replaces the previous claim of "all criteria PASS". That claim was unsupported: clean installs had a schema/migration mismatch, quest and world state were never serialized by the runtime, the migration upgrade test used hand-written fixtures, the atomic-save test failed before any mutation, corrupt saves could be overwritten by starter state, and no airplane-mode device run was performed.
 
 ---
 
@@ -11,58 +13,41 @@
 
 | Task | Status | File-level evidence | Notes |
 | --- | :---: | --- | --- |
-| Implement SQLite schema and migrations | **PASS** | [`src/platform/persistence/migrations/MigrationRunner.ts`](../../src/platform/persistence/migrations/MigrationRunner.ts), [`src/platform/persistence/migrations/allMigrations.ts`](../../src/platform/persistence/migrations/allMigrations.ts), [`tests/unit/MigrationRunner.test.ts`](../../tests/unit/MigrationRunner.test.ts) | Created automated migration system tracking versioned migrations (`save_slots`, `player_state`, `inventory_items`, `equipped_items`, `world_flags`, `quest_progress`, and `discovered_locations`). Enforces WAL mode and foreign key cascading. |
-| Implement save-slot repository | **PASS** | [`src/game/domain/repositories/SaveRepository.ts`](../../src/game/domain/repositories/SaveRepository.ts), [`src/platform/persistence/SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts), [`tests/unit/SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts) | Created `SaveRepository` interface and `SQLiteSaveRepository` implementation using parameterized queries for slot listing, creation, retrieval, and deletion. |
-| Serialize and validate save snapshots | **PASS** | [`src/game/application/SaveSnapshotValidator.ts`](../../src/game/application/SaveSnapshotValidator.ts), [`src/game/engine/GameRuntime.ts`](../../src/game/engine/GameRuntime.ts), [`tests/unit/SaveSnapshotValidator.test.ts`](../../tests/unit/SaveSnapshotValidator.test.ts) | Implemented `validateSaveSnapshot` checking version compatibility, non-empty IDs, finite coordinates, valid player facing, non-negative health/experience, valid item IDs, and slot matching. |
-| Add save/load/new/delete flows | **PASS** | [`app/index.tsx`](../../app/index.tsx), [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx), [`src/platform/persistence/SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts) | Main menu displays save slots with Level/time badges, `[PLAY]`, `[NEW GAME]`, and `[DEL]` (with delete confirmation alert). Pause modal in gameplay screen provides manual `[💾 SAVE PROGRESS]`. |
-| Add saves at map transitions, important events, explicit save, and controlled checkpoints | **PASS** | [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx), [`src/game/engine/GameRuntime.ts`](../../src/game/engine/GameRuntime.ts) | Manual save button in pause modal captures current simulation snapshot to SQLite; `createSaveSnapshot` serializes active state on demand. |
-| Add app lifecycle best-effort save | **PASS** | [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx) | `AppState.addEventListener` detects background/inactive state transitions, automatically triggers `runtime.pause()`, and writes snapshot to `saveSnapshot()`. |
-| Add database failure and corrupt-save handling | **PASS** | [`src/game/application/SaveSnapshotValidator.ts`](../../src/game/application/SaveSnapshotValidator.ts), [`src/platform/persistence/SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts), [`tests/unit/SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts) | Corrupted saves or invalid data in the database are intercepted on load, throwing structured validation errors instead of corrupting the running session or silently overwriting data. |
+| Implement SQLite schema and migrations | **PASS** | [`database.ts`](../../src/platform/persistence/database.ts), [`MigrationRunner.ts`](../../src/platform/persistence/migrations/MigrationRunner.ts), [`allMigrations.ts`](../../src/platform/persistence/migrations/allMigrations.ts), [`MigrationRunner.test.ts`](../../tests/unit/MigrationRunner.test.ts) | `database.ts` no longer creates a conflicting `schema_migrations` table. `initMigrationTable()` creates the canonical table and heals legacy installs missing the `name` column before INSERT. Clean-install and real v1→v2 upgrade tests use `ALL_MIGRATIONS`. |
+| Implement save-slot repository | **PASS** | [`SaveRepository.ts`](../../src/game/domain/repositories/SaveRepository.ts), [`SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts), [`SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts) | Parameterized CRUD, child-table upserts, cascading delete, and validation on load/save. Mock DB now honors inline SQL literals and column projection so tests reflect real queries. |
+| Serialize and validate save snapshots | **PASS** | [`SaveSnapshotValidator.ts`](../../src/game/application/SaveSnapshotValidator.ts), [`GameRuntime.ts`](../../src/game/engine/GameRuntime.ts), [`SaveSnapshotValidator.test.ts`](../../tests/unit/SaveSnapshotValidator.test.ts) | Validator now rejects malformed `worldFlags`/`questState` in addition to player/inventory/equipment fields. |
+| Add save/load/new/delete flows | **PASS** | [`app/index.tsx`](../../app/index.tsx), [`app/game/[saveSlotId].tsx`](../../app/game/%5BsaveSlotId%5D.tsx), [`SaveSessionGuard.ts`](../../src/game/application/SaveSessionGuard.ts) | Menu offers `PLAY`/`NEW GAME`/`DEL`; gameplay screen blocks all save writes when a slot failed validation. A corrupt save is left untouched until the user deletes it from the menu. |
+| Add saves at map transitions, important events, explicit save, and controlled checkpoints | **PARTIAL** | [`app/game/[saveSlotId].tsx`](../../app/game/%5BsaveSlotId%5D.tsx) (manual save + background save), [`GameRuntime.ts`](../../src/game/engine/GameRuntime.ts) (`createSaveSnapshot`) | Manual save and lifecycle save exist. There are no map transitions or checkpoints in the app yet, so those triggers cannot be implemented or verified until Phase 6. |
+| Add app lifecycle best-effort save | **PASS (code inspection)** | [`app/game/[saveSlotId].tsx`](../../app/game/%5BsaveSlotId%5D.tsx) (`AppState.addEventListener`) | Background/inactive pauses the runtime and writes through `SaveSessionGuard`. No physical lifecycle run was performed. |
+| Add database failure and corrupt-save handling | **PASS** | [`SaveSnapshotValidator.ts`](../../src/game/application/SaveSnapshotValidator.ts), [`SaveSessionGuard.ts`](../../src/game/application/SaveSessionGuard.ts), [`SaveSessionGuard.test.ts`](../../tests/unit/SaveSessionGuard.test.ts), [`SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts) | Corrupt loads throw; the guard blocks subsequent saves; a mid-transaction failure rolls back metadata/player/inventory writes. |
 
 ---
 
 ## 2. Phase 5 acceptance criteria
 
-| # | Criterion | Verdict | Evidence |
-| --- | --- | :---: | --- |
-| 1 | Player position, level, XP, HP, inventory, equipment, quest state, and world flags survive force-close/relaunch | **PASS** | Tested in [`tests/unit/PersistenceIntegration.test.ts`](../../tests/unit/PersistenceIntegration.test.ts). A complete session with moved coordinates, Level 2 XP, consumed potion, and equipped sword is saved to `SQLiteSaveRepository`, completely disposed, and re-hydrated into a new `GameRuntime` instance with 100% data parity. |
-| 2 | A save transaction cannot leave a partially updated inventory/player snapshot | **PASS** | `SQLiteSaveRepository.saveSnapshot()` wraps metadata, player state, inventory, equipment, flags, and quests inside `db.withTransactionAsync()`. If an error occurs mid-write, the transaction rolls back cleanly, leaving previous complete save data intact. Verified in [`tests/unit/SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts). |
-| 3 | Migrations work from an earlier schema fixture | **PASS** | `runMigrations()` applies pending migrations in ascending version order and updates `schema_migrations`. Upgrading an earlier v1 schema fixture to v2 is verified in [`tests/unit/MigrationRunner.test.ts`](../../tests/unit/MigrationRunner.test.ts). |
-| 4 | Airplane-mode save/load works | **PASS** | All persistence uses local Expo SQLite (`dungeonbound.db`) with zero external network requests or remote API calls. Android Metro bundle export verified (1,802 modules, 2.9 MB JS). |
+| # | Criterion | Verdict | Evidence | Reason |
+| --- | --- | :---: | --- | --- |
+| 1 | Player position, level, XP, HP, inventory, equipment, quest state, and world flags survive force-close/relaunch | **PASS (simulated)** | [`GameRuntime.ts`](../../src/game/engine/GameRuntime.ts) (`createSaveSnapshot`/`loadFromSnapshot`), [`GameSession.ts`](../../src/game/engine/GameSession.ts), [`SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts), [`PersistenceIntegration.test.ts`](../../tests/unit/PersistenceIntegration.test.ts) | Runtime now stores and serializes `worldFlags`/`questState`; repository persists them in `world_flags`/`quest_progress`. Integration test disposes one runtime, boots a fresh one, and asserts all fields including quest/world state. This is a simulated process restart, not a physical force-close. |
+| 2 | A save transaction cannot leave a partially updated inventory/player snapshot | **PASS** | [`SQLiteSaveRepository.ts:161-279`](../../src/platform/persistence/SQLiteSaveRepository.ts), [`SQLiteSaveRepository.test.ts`](../../tests/unit/SQLiteSaveRepository.test.ts) | Test now injects failure on an `INSERT INTO inventory_items` **after** metadata, player, and DELETE writes, then verifies the previous player level, HP, and full inventory remain intact. |
+| 3 | Migrations work from an earlier schema fixture | **PASS** | [`MigrationRunner.ts`](../../src/platform/persistence/migrations/MigrationRunner.ts), [`MigrationRunner.test.ts`](../../tests/unit/MigrationRunner.test.ts) | Test uses the real `ALL_MIGRATIONS`: applies only v1, asserts v2-only table absent, then applies v2 and asserts table names/versions. A separate test heals a legacy `schema_migrations` table without `name`. |
+| 4 | Airplane-mode save/load works | **UNVERIFIED** | [`database.ts`](../../src/platform/persistence/database.ts), [`SQLiteSaveRepository.ts`](../../src/platform/persistence/SQLiteSaveRepository.ts) | Static evidence shows only local Expo SQLite with no network calls, and the Android Metro bundle exports. No physical device was put in airplane mode and no force-close/relaunch run was performed, so end-to-end offline behavior is not claimed. |
 
 ---
 
 ## 3. Verification run log
 
-Executed on branch `feat/phase-5-persistence-save-load`:
-
 | Command | Result |
 | --- | --- |
 | `npm run typecheck` | PASS — 0 TypeScript errors |
-| `npm test` | PASS — 22 test suites, 101 tests passed |
+| `npm test -- --runInBand` | PASS — 24 suites, 123 tests |
 | `npm run lint` | PASS — 0 ESLint errors |
-| `npx expo export --platform android --no-bytecode` | PASS — Android bundle exported successfully (1,802 modules, 2.9 MB JS) |
+| `npx expo export --platform android --no-bytecode` | PASS — 1,806 modules, 2.9 MB JS |
 
-### Test Suites Breakdown
-- `tests/unit/MigrationRunner.test.ts` (Migration ordering, idempotency, fixture upgrade)
-- `tests/unit/SaveSnapshotValidator.test.ts` (Snapshot validation, bounds checking, corrupt save detection)
-- `tests/unit/SQLiteSaveRepository.test.ts` (Slot CRUD, save/load, atomic transaction rollback)
-- `tests/unit/PersistenceIntegration.test.ts` (Full force-close/relaunch roundtrip with XP, gear, and potions)
-- `tests/unit/ProgressionIntegration.test.ts`
-- `tests/unit/ProgressionRules.test.ts`
-- `tests/unit/InventoryRules.test.ts`
-- `tests/unit/EquipmentRules.test.ts`
-- `tests/unit/ConsumableRules.test.ts`
-- `tests/unit/LootRules.test.ts`
-- `tests/unit/CombatIntegration.test.ts`
-- `tests/unit/CombatRules.test.ts`
-- `tests/unit/EnemyAIRules.test.ts`
-- `tests/unit/CollisionGrid.test.ts`
-- `tests/unit/MovementRules.test.ts`
-- `tests/unit/PlayerAnimation.test.ts`
-- `tests/unit/DecoupledRender.test.ts`
-- `tests/unit/Camera.test.ts`
-- `tests/unit/TileMapParser.test.ts`
-- `tests/unit/Vector2.test.ts`
-- `tests/unit/GameLoop.test.ts`
-- `tests/unit/GameRuntime.test.ts`
+---
+
+## 4. Notes
+
+1. `CURRENT_SAVE_VERSION` remains `1`; no new migration was required because `world_flags` and `quest_progress` tables already existed in migration 001. The gap was that the runtime never wrote to them.
+2. `SaveSessionGuard.allowNewGame()` is the explicit recovery escape hatch for callers that delete a corrupt slot and start fresh; the gameplay error screen currently sends the user back to the menu, where `DEL` performs that deletion.
+3. Quest/world state values are JSON-serialized primitives and JSON-serializable objects. The validator rejects non-primitive world-flag values and non-object `questState`.
+4. No device, frame-rate, or offline-force-close result is claimed.

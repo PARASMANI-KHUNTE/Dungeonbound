@@ -36,8 +36,8 @@ describe('SQLiteSaveRepository (Acceptance Criteria)', () => {
       body: null,
       accessory: null,
     },
-    worldFlags: { boss_slain: false },
-    questState: {},
+    worldFlags: { boss_slain: false, goblins_slain: 3, region: 'village' },
+    questState: { main_quest: { status: 'active', progress: 2 } },
     timestamp: '2026-11-22T12:00:00.000Z',
   };
 
@@ -88,6 +88,8 @@ describe('SQLiteSaveRepository (Acceptance Criteria)', () => {
       expect(loaded?.player.position.x).toBe(150);
       expect(loaded?.player.position.y).toBe(220);
       expect(loaded?.equipment.weapon?.itemId).toBe('rusty_sword');
+      expect(loaded?.worldFlags).toEqual(validSnapshotV1.worldFlags);
+      expect(loaded?.questState).toEqual(validSnapshotV1.questState);
 
       const slots = await repo.listSlots();
       expect(slots[0].hasData).toBe(true);
@@ -116,7 +118,7 @@ describe('SQLiteSaveRepository (Acceptance Criteria)', () => {
       const initialLoaded = await repo.loadSnapshot('slot_1');
       expect(initialLoaded?.player.level).toBe(2);
 
-      // 2. Prepare new snapshot with level 5
+      // 2. Prepare new snapshot with level 5 and a changed inventory stack.
       const newSnapshot: SaveSnapshot = {
         ...validSnapshotV1,
         player: {
@@ -125,20 +127,34 @@ describe('SQLiteSaveRepository (Acceptance Criteria)', () => {
           currentHealth: 148,
           maxHealth: 148,
         },
+        inventory: [
+          {
+            slotIndex: 0,
+            item: { instanceId: 'p1', itemId: 'health_potion_small', quantity: 9 },
+          },
+        ],
       };
 
-      // 3. Inject simulated failure during write inside transaction
-      db.failNextRun = true;
+      // 3. Fail in the middle of the transaction, AFTER the slot metadata,
+      //    player row, and old inventory rows have already been written.
+      db.failRunOnSqlPattern = /INSERT\s+INTO inventory_items/i;
 
-      // 4. Expect save to fail and transaction to roll back
       await expect(repo.saveSnapshot('slot_1', newSnapshot)).rejects.toThrow(
         'Simulated SQLite run error'
       );
 
-      // 5. Verify database was NOT partially updated: previous level 2 save remains intact!
+      // 4. Verify all earlier writes were rolled back, not just skipped.
       const afterRollback = await repo.loadSnapshot('slot_1');
       expect(afterRollback?.player.level).toBe(2);
       expect(afterRollback?.player.currentHealth).toBe(112);
+      expect(afterRollback?.inventory[0].item?.quantity).toBe(2);
+      expect(afterRollback?.inventory).toHaveLength(20);
+
+      const rawPlayerRows = db.tables.get('player_state') ?? [];
+      expect(rawPlayerRows).toHaveLength(1);
+      expect(rawPlayerRows[0].level).toBe(2);
+      const rawInventoryRows = db.tables.get('inventory_items') ?? [];
+      expect(rawInventoryRows).toHaveLength(2);
     });
   });
 });

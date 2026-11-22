@@ -1,3 +1,7 @@
+import {
+  ALL_MIGRATIONS,
+  migration002AddDiscoveredLocations,
+} from '../../src/platform/persistence/migrations/allMigrations';
 import { Migration } from '../../src/platform/persistence/migrations/MigrationTypes';
 import {
   getCurrentSchemaVersion,
@@ -41,7 +45,6 @@ describe('MigrationRunner (Acceptance Criteria)', () => {
 
     const finalVer = await runMigrations(db, testMigrations);
     expect(finalVer).toBe(3);
-    // Should run 1, then 2, then 3
     expect(executed).toEqual([1, 2, 3]);
 
     const currentVer = await getCurrentSchemaVersion(db);
@@ -63,40 +66,73 @@ describe('MigrationRunner (Acceptance Criteria)', () => {
     await runMigrations(db, testMigrations);
     expect(executed).toEqual([1]);
 
-    // Run again
     await runMigrations(db, testMigrations);
-    expect(executed).toEqual([1]); // No duplicate execution
+    expect(executed).toEqual([1]);
   });
 
-  it('works from an earlier schema fixture (upgrades from v1 fixture to v2) (Acceptance Criterion)', async () => {
-    // 1. Simulate earlier schema fixture at v1
-    const v1Migration: Migration = {
-      version: 1,
-      name: '001_initial_schema',
-      async up(conn) {
-        await conn.execAsync('CREATE TABLE IF NOT EXISTS save_slots (id TEXT PRIMARY KEY);');
-      },
-    };
+  it('creates the complete real schema on a clean install', async () => {
+    const version = await runMigrations(db);
 
-    await runMigrations(db, [v1Migration], 1);
-    expect(await getCurrentSchemaVersion(db)).toBe(1);
+    expect(version).toBe(2);
+    expect([...db.tables.keys()].sort()).toEqual(
+      [
+        'schema_migrations',
+        'save_slots',
+        'player_state',
+        'inventory_items',
+        'equipped_items',
+        'world_flags',
+        'quest_progress',
+        'discovered_locations',
+      ].sort()
+    );
+  });
+
+  it('upgrades from the real v1 fixture to v2 (Acceptance Criterion)', async () => {
+    // 1. Earlier app version: only migration 001 has been applied.
+    const v1 = await runMigrations(db, ALL_MIGRATIONS, 1);
+    expect(v1).toBe(1);
     expect(db.tables.has('save_slots')).toBe(true);
+    expect(db.tables.has('world_flags')).toBe(true);
+    expect(db.tables.has('quest_progress')).toBe(true);
     expect(db.tables.has('discovered_locations')).toBe(false);
 
-    // 2. Now simulate app update with new v2 migration fixture
-    const v2Migration: Migration = {
-      version: 2,
-      name: '002_add_discovered_locations',
-      async up(conn) {
-        await conn.execAsync(
-          'CREATE TABLE IF NOT EXISTS discovered_locations (id TEXT PRIMARY KEY);'
-        );
-      },
-    };
-
-    const newVersion = await runMigrations(db, [v1Migration, v2Migration]);
-    expect(newVersion).toBe(2);
-    expect(db.tables.has('save_slots')).toBe(true);
+    // 2. Later app version: migration 002 is applied without re-running 001.
+    const v2 = await runMigrations(db, ALL_MIGRATIONS);
+    expect(v2).toBe(2);
     expect(db.tables.has('discovered_locations')).toBe(true);
+    expect(migration002AddDiscoveredLocations.version).toBe(2);
+
+    const applied = await db.getAllAsync<{ version: number; name: string }>(
+      'SELECT version, name FROM schema_migrations ORDER BY version ASC;'
+    );
+    expect(applied).toEqual([
+      { version: 1, name: '001_initial_schema' },
+      { version: 2, name: '002_add_discovered_locations' },
+    ]);
+  });
+
+  it('heals a legacy schema_migrations table created without the name column', async () => {
+    await db.execAsync(
+      'CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);'
+    );
+    expect(db.tableColumns.get('schema_migrations')).not.toContain('name');
+
+    const version = await runMigrations(db, [
+      {
+        version: 1,
+        name: '001_legacy_repair',
+        async up(conn) {
+          await conn.execAsync('CREATE TABLE IF NOT EXISTS legacy_table (id TEXT PRIMARY KEY);');
+        },
+      },
+    ]);
+
+    expect(version).toBe(1);
+    expect(db.tableColumns.get('schema_migrations')).toContain('name');
+    const rows = await db.getAllAsync<{ version: number; name: string }>(
+      'SELECT version, name FROM schema_migrations;'
+    );
+    expect(rows).toEqual([{ version: 1, name: '001_legacy_repair' }]);
   });
 });

@@ -131,6 +131,8 @@ export class GameRuntime {
       elapsedTimeSeconds: 0,
       isPaused: false,
       eventQueue: [],
+      worldFlags: {},
+      questState: {},
     };
 
     this.inputAdapter = new TouchInputAdapter();
@@ -331,8 +333,8 @@ export class GameRuntime {
       },
       inventory: this.session.player.inventory,
       equipment: this.session.player.equipment,
-      worldFlags: {},
-      questState: {},
+      worldFlags: { ...this.session.worldFlags },
+      questState: { ...this.session.questState },
       timestamp: new Date().toISOString(),
     });
   }
@@ -366,10 +368,30 @@ export class GameRuntime {
 
     this.session.player = loadedPlayer;
     this.session.elapsedTimeSeconds = snapshot.playTimeSeconds;
+    this.session.worldFlags = { ...snapshot.worldFlags };
+    this.session.questState = { ...snapshot.questState };
     this.session.camera.followTarget(loadedPosition);
     this.cachedProjection = null;
     this.publishRender();
     this.publishUi(true);
+  }
+
+  setWorldFlag(key: string, value: boolean | number | string): void {
+    if (this.isDisposed) return;
+    this.session.worldFlags = { ...this.session.worldFlags, [key]: value };
+  }
+
+  getWorldFlag(key: string): boolean | number | string | undefined {
+    return this.session.worldFlags[key];
+  }
+
+  setQuestState(questId: string, progress: unknown): void {
+    if (this.isDisposed) return;
+    this.session.questState = { ...this.session.questState, [questId]: progress };
+  }
+
+  getQuestState(questId: string): unknown {
+    return this.session.questState[questId];
   }
 
   useItem(slotIndex: number): { success: boolean; reason?: string } {
