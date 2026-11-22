@@ -1,4 +1,6 @@
 import { getItemDefinition } from '../content/definitions/items';
+import { validateSaveSnapshot } from '../application/SaveSnapshotValidator';
+import { CURRENT_SAVE_VERSION, SaveSnapshot } from '../domain/repositories/SaveRepository';
 import { TouchInputAdapter } from '../../input/TouchInputAdapter';
 import {
   EnemyRenderItem,
@@ -291,6 +293,66 @@ export class GameRuntime {
       this.publishRender();
       this.publishUi(true);
     }
+  }
+
+  createSaveSnapshot(): SaveSnapshot {
+    return Object.freeze({
+      version: CURRENT_SAVE_VERSION,
+      slotId: this.session.saveSlotId,
+      playTimeSeconds: Math.floor(this.session.elapsedTimeSeconds),
+      mapId: this.session.map.id,
+      player: {
+        level: this.session.player.level,
+        experience: this.session.player.experience,
+        currentHealth: this.session.player.currentHealth,
+        maxHealth: this.session.player.derivedStats.maxHealth,
+        position: createVector2(
+          this.session.player.transform.position.x,
+          this.session.player.transform.position.y
+        ),
+        facing: this.session.player.transform.facing,
+      },
+      inventory: this.session.player.inventory,
+      equipment: this.session.player.equipment,
+      worldFlags: {},
+      questState: {},
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  loadFromSnapshot(snapshot: SaveSnapshot): void {
+    const validation = validateSaveSnapshot(snapshot);
+    if (!validation.valid) {
+      throw new Error(`Cannot load corrupted save: ${validation.errors.join('; ')}`);
+    }
+
+    const loadedPosition = createVector2(snapshot.player.position.x, snapshot.player.position.y);
+    const loadedFacing = snapshot.player.facing;
+
+    let loadedPlayer = createPlayerEntity(
+      'hero_player',
+      loadedPosition,
+      loadedFacing,
+      undefined,
+      'idle',
+      snapshot.player.level,
+      snapshot.player.experience
+    );
+
+    loadedPlayer = {
+      ...loadedPlayer,
+      inventory: snapshot.inventory,
+      equipment: snapshot.equipment,
+      currentHealth: snapshot.player.currentHealth,
+    };
+    loadedPlayer = recalculatePlayerStats(loadedPlayer, getItemDefinition);
+
+    this.session.player = loadedPlayer;
+    this.session.elapsedTimeSeconds = snapshot.playTimeSeconds;
+    this.session.camera.followTarget(loadedPosition);
+    this.cachedProjection = null;
+    this.publishRender();
+    this.publishUi(true);
   }
 
   useItem(slotIndex: number): { success: boolean; reason?: string } {
