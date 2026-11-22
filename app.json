@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Dungeonbound",
+    "slug": "dungeonbound",
+    "version": "0.1.0",
+    "orientation": "landscape",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "dungeonbound",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.dungeonbound.game",
+      "adaptiveIcon": {
+        "backgroundColor": "#121212",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite"
+    ]
+  }
+}
