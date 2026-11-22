@@ -75,6 +75,16 @@ export default function GameplayScreen() {
     runtimeRef.current?.input.setMovement(0, 0);
   }, []);
 
+  // Attack handler
+  const handleAttack = useCallback(() => {
+    runtimeRef.current?.triggerPlayerAttack();
+  }, []);
+
+  // Respawn handler
+  const handleRespawn = useCallback(() => {
+    runtimeRef.current?.respawnPlayer();
+  }, []);
+
   // Pause / Resume handlers
   const handleTogglePause = useCallback(() => {
     const runtime = runtimeRef.current;
@@ -102,7 +112,8 @@ export default function GameplayScreen() {
     );
   }
 
-  const { player, camera, map, stats } = projection;
+  const { player, enemies, camera, map, stats } = projection;
+  const aliveEnemies = enemies.filter((e) => e.state !== 'dead').length;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -134,7 +145,7 @@ export default function GameplayScreen() {
               />
             </View>
             <Text style={styles.hpText}>
-              HP: {player.currentHealth}/{player.maxHealth}
+              HP: {player.currentHealth}/{player.maxHealth} • Goblins: {aliveEnemies}
             </Text>
           </View>
 
@@ -143,8 +154,9 @@ export default function GameplayScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Touch Controls Overlay: Directional Pad */}
+        {/* Touch Controls Overlay: Left D-Pad, Right Attack Button */}
         <View style={styles.controlsOverlay} pointerEvents="box-none">
+          {/* Left D-Pad */}
           <View style={styles.dpadContainer}>
             <TouchableOpacity
               style={styles.dpadBtn}
@@ -184,10 +196,25 @@ export default function GameplayScreen() {
               <Text style={styles.dpadIcon}>▼</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Right Action Button: Attack */}
+          <View style={styles.actionContainer}>
+            <TouchableOpacity
+              style={[
+                styles.attackBtn,
+                player.isAttacking && styles.attackBtnActive,
+              ]}
+              onPress={handleAttack}
+              activeOpacity={0.7}
+              accessibilityLabel="Attack with Sword"
+            >
+              <Text style={styles.attackBtnText}>⚔️ ATTACK</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Pause Modal */}
-        <Modal visible={isPaused} transparent animationType="fade">
+        <Modal visible={isPaused && !player.isDead} transparent animationType="fade">
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>GAME PAUSED</Text>
@@ -203,6 +230,9 @@ export default function GameplayScreen() {
                 <Text style={styles.statLine}>
                   Camera focus: <Text style={styles.statVal}>({Math.round(camera.position.x)}, {Math.round(camera.position.y)})</Text>
                 </Text>
+                <Text style={styles.statLine}>
+                  Enemies remaining: <Text style={styles.statVal}>{aliveEnemies}</Text>
+                </Text>
               </View>
 
               <TouchableOpacity style={styles.modalResumeBtn} onPress={handleTogglePause}>
@@ -211,6 +241,24 @@ export default function GameplayScreen() {
 
               <TouchableOpacity style={styles.modalMenuBtn} onPress={handleReturnToMenu}>
                 <Text style={styles.modalBtnText}>MAIN MENU</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Game Over / Death Modal */}
+        <Modal visible={player.isDead} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalCard, { borderColor: '#E63946' }]}>
+              <Text style={[styles.modalTitle, { color: '#E63946' }]}>YOU DIED</Text>
+              <Text style={styles.modalSubtitle}>Defeated by corrupted creatures</Text>
+
+              <TouchableOpacity style={[styles.modalResumeBtn, { backgroundColor: '#8B0000', borderColor: '#E63946' }]} onPress={handleRespawn}>
+                <Text style={styles.modalBtnText}>RESPAWN AT VILLAGE</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.modalMenuBtn} onPress={handleReturnToMenu}>
+                <Text style={styles.modalBtnText}>RETURN TO MENU</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -271,7 +319,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   hpBarContainer: {
-    width: 140,
+    width: 150,
     height: 10,
     backgroundColor: '#27223D',
     borderRadius: 5,
@@ -306,6 +354,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 20,
     left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
   },
   dpadContainer: {
     alignItems: 'center',
@@ -339,9 +391,33 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  actionContainer: {
+    alignItems: 'center',
+  },
+  attackBtn: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#9E2A2B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: '#E63946',
+    elevation: 4,
+  },
+  attackBtnActive: {
+    backgroundColor: '#D90429',
+    borderColor: '#FFF',
+  },
+  attackBtnText: {
+    color: '#FAF0CA',
+    fontSize: 11,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
   },
