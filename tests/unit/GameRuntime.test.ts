@@ -97,4 +97,76 @@ describe('GameRuntime', () => {
 
     runtime.dispose();
   });
+
+  it('blocks a second attack during cooldown and allows it again once the cooldown elapses', () => {
+    const runtime = new GameRuntime('test_slot', testMap, 400, 300);
+    runtime.start(() => 0);
+    runtime.currentSession.enemies.clear();
+
+    expect(runtime.triggerPlayerAttack()).toBe(true);
+    // The attack is still in progress, so a second trigger is rejected.
+    expect(runtime.triggerPlayerAttack()).toBe(false);
+
+    // Full attack is 70 + 140 + 110 = 320ms; 20 steps of 16ms covers it.
+    for (let i = 0; i < 20; i++) runtime.fixedUpdate(16 / 1000);
+    expect(runtime.currentSession.playerAttackTimerMs).toBe(0);
+    expect(runtime.currentSession.playerAttackCooldownMs).toBeGreaterThan(0);
+    expect(runtime.triggerPlayerAttack()).toBe(false);
+
+    // Cooldown is 380ms; 24 steps of 16ms (384ms) clears it.
+    for (let i = 0; i < 24; i++) runtime.fixedUpdate(16 / 1000);
+    expect(runtime.currentSession.playerAttackCooldownMs).toBe(0);
+    expect(runtime.triggerPlayerAttack()).toBe(true);
+
+    runtime.dispose();
+  });
+
+  it('pauses on player death, freezes elapsed time, and resumes on respawn', () => {
+    const runtime = new GameRuntime('test_slot', testMap, 400, 300);
+    runtime.start(() => 0);
+    runtime.currentSession.enemies.clear();
+
+    for (let i = 0; i < 10; i++) runtime.fixedUpdate(1 / 60);
+    const timeAtDeath = runtime.currentSession.elapsedTimeSeconds;
+    expect(timeAtDeath).toBeGreaterThan(0);
+
+    runtime.damagePlayer(runtime.currentSession.player.stats.maxHealth);
+
+    expect(runtime.isPaused).toBe(true);
+    expect(runtime.currentSession.player.animation.state).toBe('dead');
+    expect(runtime.createProjection().player.isDead).toBe(true);
+
+    // Further updates are ignored while the death modal is shown.
+    for (let i = 0; i < 20; i++) runtime.fixedUpdate(1 / 60);
+    expect(runtime.currentSession.elapsedTimeSeconds).toBe(timeAtDeath);
+
+    runtime.respawnPlayer();
+
+    expect(runtime.isPaused).toBe(false);
+    expect(runtime.currentSession.player.currentHealth).toBe(
+      runtime.currentSession.player.derivedStats.maxHealth
+    );
+    const timeAfterRespawn = runtime.currentSession.elapsedTimeSeconds;
+    runtime.fixedUpdate(1 / 60);
+    expect(runtime.currentSession.elapsedTimeSeconds).toBeGreaterThan(timeAfterRespawn);
+
+    runtime.dispose();
+  });
+
+  it('forwards combat events to the injected feedback port', () => {
+    const played: string[] = [];
+    const runtime = new GameRuntime('test_slot', testMap, 400, 300, {
+      play: (event) => played.push(event.type),
+    });
+
+    runtime.damagePlayer(5);
+    expect(played).toContain('PLAYER_DAMAGED');
+    // The event is still queued for domain consumers.
+    expect(runtime.currentSession.eventQueue.some((e) => e.type === 'PLAYER_DAMAGED')).toBe(true);
+
+    runtime.respawnPlayer();
+    expect(played).toContain('PLAYER_RESPAWNED');
+
+    runtime.dispose();
+  });
 });

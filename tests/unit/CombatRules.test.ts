@@ -1,4 +1,6 @@
 import {
+  ENEMY_INVULNERABLE_DURATION_MS,
+  PLAYER_INVULNERABLE_DURATION_MS,
   calculateAttackHitbox,
   calculateDamage,
   calculateKnockbackPosition,
@@ -56,5 +58,10 @@ describe('CombatRules', () => {
     const knockbackPos = calculateKnockbackPosition(attacker, defender, 30);
     expect(knockbackPos.x).toBeCloseTo(150, 1);
     expect(knockbackPos.y).toBeCloseTo(100, 1);
+  });
+
+  it('uses the invulnerability durations agreed in ADR-009', () => {
+    expect(ENEMY_INVULNERABLE_DURATION_MS).toBe(280);
+    expect(PLAYER_INVULNERABLE_DURATION_MS).toBe(400);
   });
 });

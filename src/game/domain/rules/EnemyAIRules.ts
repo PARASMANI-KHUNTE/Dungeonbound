@@ -100,7 +100,21 @@ export function updateEnemyAI(
     };
   }
 
-  // 4. Idle or Chase states: evaluate distance to player
+  // 4. Defensive guard: only idle/chase may evaluate movement and attacks.
+  // A corrupted or future state must never silently fall through into an attack.
+  if (enemy.state !== 'idle' && enemy.state !== 'chase') {
+    return {
+      updatedEnemy: updateEnemy(enemy, {
+        state: 'idle',
+        stateTimerMs: 0,
+        attackCooldownRemainingMs: nextCooldown,
+      }),
+      shouldTriggerAttackHit: false,
+      intendedMovement: createVector2(0, 0),
+    };
+  }
+
+  // 5. Idle or Chase states: evaluate distance to player
   const distToPlayer = distanceBetween(enemy.transform.position, playerPosition);
   const dx = playerPosition.x - enemy.transform.position.x;
   const dy = playerPosition.y - enemy.transform.position.y;
