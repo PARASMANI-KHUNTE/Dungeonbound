@@ -4,6 +4,13 @@ export type ItemType = 'consumable' | 'weapon' | 'armor' | 'accessory' | 'materi
 
 export type EquipmentSlot = 'weapon' | 'head' | 'body' | 'accessory';
 
+const EQUIPMENT_SLOTS: readonly string[] = ['weapon', 'head', 'body', 'accessory'];
+
+/** Runtime guard for values arriving from untyped data (saves, UI, content JSON). */
+export function isEquipmentSlot(value: unknown): value is EquipmentSlot {
+  return typeof value === 'string' && EQUIPMENT_SLOTS.includes(value);
+}
+
 export interface ItemStatModifiers {
   readonly maxHealth?: number;
   readonly attack?: number;

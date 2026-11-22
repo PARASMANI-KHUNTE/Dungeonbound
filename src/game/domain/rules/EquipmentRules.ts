@@ -4,6 +4,7 @@ import {
   InventoryItem,
   InventorySlot,
   ItemDefinition,
+  isEquipmentSlot,
 } from '../items/ItemTypes';
 import { calculateLevelStatBonuses } from './ProgressionRules';
 
@@ -75,6 +76,15 @@ export function equipItem(
     });
   }
 
+  if (!isEquipmentSlot(itemDef.slot)) {
+    return Object.freeze({
+      success: false,
+      error: `Item "${itemDef.name}" has an invalid equipment slot`,
+      updatedInventory: inventory,
+      updatedEquipment: equipment,
+    });
+  }
+
   const targetSlot: EquipmentSlot = itemDef.slot;
   const currentEquipped = equipment[targetSlot];
 
@@ -118,6 +128,15 @@ export function unequipItem(
   equipment: EquipmentState,
   slotToUnequip: EquipmentSlot
 ): UnequipResult {
+  if (!isEquipmentSlot(slotToUnequip)) {
+    return Object.freeze({
+      success: false,
+      error: `Invalid equipment slot: ${String(slotToUnequip)}`,
+      updatedInventory: inventory,
+      updatedEquipment: equipment,
+    });
+  }
+
   const itemToUnequip = equipment[slotToUnequip];
   if (!itemToUnequip) {
     return Object.freeze({

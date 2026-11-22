@@ -93,30 +93,37 @@ describe('Phase 4 Progression & Inventory Integration', () => {
       const initialXp = runtime.currentSession.player.experience;
       const xpReward = enemy!.stats.xpReward;
 
+      // Force a one-hit kill so the XP assertions always execute.
+      runtime.currentSession.enemies.set('goblin_1', { ...enemy!, currentHealth: 1 });
+
       // Position player next to goblin_1 and trigger attack
       runtime.setPlayerPositionAndFacing(
         createVector2(enemy!.transform.position.x - 15, enemy!.transform.position.y),
         'right'
       );
 
-      // Deal enough damage to kill enemy
       runtime.triggerPlayerAttack();
+      // Startup is 70ms; 80ms reaches the active window.
+      runtime.fixedUpdate(0.08);
 
-      // Step simulation through startup to active hit window
-      runtime.fixedUpdate(0.08); // 80ms advances past 60ms startup
+      const defeatedEnemy = runtime.currentSession.enemies.get('goblin_1')!;
+      expect(defeatedEnemy.currentHealth).toBe(0);
+      expect(defeatedEnemy.state).toBe('dead');
+      expect(defeatedEnemy.xpAwarded).toBe(true);
+      expect(runtime.currentSession.player.experience).toBe(initialXp + xpReward);
 
-      const updatedEnemy = runtime.currentSession.enemies.get('goblin_1');
-      // If goblin took damage or died
-      if (updatedEnemy && updatedEnemy.currentHealth <= 0) {
-        expect(updatedEnemy.xpAwarded).toBe(true);
-        expect(runtime.currentSession.player.experience).toBe(initialXp + xpReward);
+      const xpAfterDefeat = runtime.currentSession.player.experience;
 
-        const xpAfterDefeat = runtime.currentSession.player.experience;
+      // Finish the in-flight attack (240ms remaining) and clear its 380ms
+      // cooldown, then attack again to prove the dead enemy pays no extra XP.
+      for (let i = 0; i < 45; i++) runtime.fixedUpdate(0.016);
+      expect(runtime.triggerPlayerAttack()).toBe(true);
+      for (let i = 0; i < 8; i++) runtime.fixedUpdate(0.016);
 
-        // Run another simulation step; ensure XP is NOT awarded again
-        runtime.fixedUpdate(0.05);
-        expect(runtime.currentSession.player.experience).toBe(xpAfterDefeat);
-      }
+      expect(runtime.currentSession.player.experience).toBe(xpAfterDefeat);
+      expect(
+        runtime.currentSession.eventQueue.filter((e) => e.type === 'ENEMY_DEFEATED')
+      ).toHaveLength(1);
     });
 
     it('handles level up crossing more than one level with full heal and stat growth', () => {
