@@ -1,5 +1,10 @@
 import { getItemDefinition } from '../../src/game/content/definitions/items';
 import {
+  EquipmentSlot,
+  ItemDefinition,
+  isEquipmentSlot,
+} from '../../src/game/domain/items/ItemTypes';
+import {
   calculateDerivedStats,
   createEmptyEquipment,
   equipItem,
@@ -124,6 +129,50 @@ describe('EquipmentRules', () => {
       expect(unequipRes.success).toBe(false);
       expect(unequipRes.error).toContain('inventory is full');
       expect(unequipRes.updatedEquipment.body?.itemId).toBe('cloth_tunic');
+    });
+  });
+
+  describe('Invalid equipment slots (Acceptance Criteria)', () => {
+    it('rejects an unknown slot passed to unequipItem', () => {
+      const inv = createEmptyInventory(4);
+      const eq = createEmptyEquipment();
+
+      const res = unequipItem(inv, eq, 'trinket' as unknown as EquipmentSlot);
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Invalid equipment slot');
+      expect(res.updatedEquipment).toBe(eq);
+      expect(res.updatedInventory).toBe(inv);
+    });
+
+    it('rejects a malformed item definition slot on equip', () => {
+      let inv = createEmptyInventory(4);
+      inv = addItemToInventory(
+        inv,
+        { itemId: 'rusty_sword', quantity: 1 },
+        getItemDefinition
+      ).updatedInventory;
+      const eq = createEmptyEquipment();
+
+      const badGetItemDef = (id: string): ItemDefinition | undefined => {
+        const def = getItemDefinition(id);
+        if (!def) return undefined;
+        return { ...def, slot: 'trinket' as unknown as EquipmentSlot };
+      };
+
+      const res = equipItem(inv, eq, 0, badGetItemDef);
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('invalid equipment slot');
+      expect(res.updatedEquipment.weapon).toBeNull();
+      expect(res.updatedInventory).toBe(inv);
+    });
+
+    it('accepts only the four declared equipment slots', () => {
+      expect(isEquipmentSlot('weapon')).toBe(true);
+      expect(isEquipmentSlot('head')).toBe(true);
+      expect(isEquipmentSlot('body')).toBe(true);
+      expect(isEquipmentSlot('accessory')).toBe(true);
+      expect(isEquipmentSlot('trinket')).toBe(false);
+      expect(isEquipmentSlot(undefined)).toBe(false);
     });
   });
 
