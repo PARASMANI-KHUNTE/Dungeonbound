@@ -11,7 +11,6 @@ import {
 import { useRouter } from 'expo-router';
 import {
   initDatabase,
-  getPersistenceProbe,
   recordPersistenceProbe,
   getSaveRepository,
   PersistenceProbeRecord,

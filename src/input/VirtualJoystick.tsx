@@ -6,7 +6,7 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
 } from 'react-native';
-import { Vector2, createVector2, vectorLength } from '../game/domain/value-objects/Vector2';
+import { Vector2, createVector2 } from '../game/domain/value-objects/Vector2';
 
 export interface VirtualJoystickProps {
   readonly onMove: (vector: Vector2) => void;
