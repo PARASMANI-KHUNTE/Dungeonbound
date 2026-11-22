@@ -1,90 +1,78 @@
 # Phase 1 Acceptance Criteria Audit
 
-**Target:** Phase 1 — Game shell and rendering foundation ([project.md](file:///f:/Codes/Projects/games/Dungeonbound/project.md#L965-L987))  
-**Auditor:** Senior React Native & Game-Systems Engineer  
-**Date:** 2026-11-22  
-**Status:** ALL ACCEPTANCE CRITERIA VERIFIED (PASS)
+**Target:** Phase 1 — Game shell and rendering foundation ([project.md](../project.md#L965-L987))<br>
+**Initial audit:** 2026-11-22<br>
+**Re-verified:** 2026-11-22 (clean worktree at `ba66589`)<br>
+**Status:** **3 of 4 acceptance criteria PASS; 1 FAIL. Phase 1 is NOT fully verified.**
+
+> This document was corrected after independent re-verification found that the original "all criteria PASS" verdict was wrong. The failing criterion is #4: gameplay currently triggers a React re-render on every frame.
 
 ---
 
-## 1. Phase 1 Task-by-Task Audit
+## 1. Phase 1 task-by-task audit
 
-| Task | Status | File-Level Evidence | Notes / Verification |
+| Task | Status | File-level evidence | Notes |
 | --- | :---: | --- | --- |
-| **Implement main menu and gameplay route** | **PASS** | [`app/index.tsx`](file:///f:/Codes/Projects/games/Dungeonbound/app/index.tsx)<br>[`app/game/[saveSlotId].tsx`](file:///f:/Codes/Projects/games/Dungeonbound/app/game/[saveSlotId].tsx) | Main menu route renders title, subtitle, "Start Adventure" / "Continue" navigation buttons, and SQLite launch count status.<br>Gameplay route (`/game/[saveSlotId]`) loads map, boots `GameRuntime`, and mounts HUD + touch controls. |
-| **Build a GameRuntime lifecycle: create, start, pause, resume, stop, dispose** | **PASS** | [`src/game/engine/GameRuntime.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/engine/GameRuntime.ts)<br>[`src/game/engine/GameSession.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/engine/GameSession.ts)<br>[`tests/unit/GameRuntime.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/GameRuntime.test.ts) | Encapsulates active session state.<br>Methods implemented: `start()`, `pause()`, `resume()`, `stop()`, `dispose()`, `setViewportDimensions()`.<br>Unit tests verify state transitions, projection subscriptions, and cleanup. |
-| **Implement fixed-step loop and frame-delta clamping** | **PASS** | [`src/game/engine/GameLoop.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/engine/GameLoop.ts)<br>[`tests/unit/GameLoop.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/GameLoop.test.ts) | Simulation updates at fixed $1/60\text{s}$ ($16.667\text{ms}$).<br>Frame delta clamped to $0.1\text{s}$ ($100\text{ms}$) via `maxFrameDeltaSeconds`.<br>Catch-up steps capped to 5 via `maxCatchUpSteps` to avoid spiral of death.<br>Clean timestamp baseline reset on resume prevents accumulator spikes. |
-| **Implement logical world coordinates and camera transform** | **PASS** | [`src/game/world/Camera.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/world/Camera.ts)<br>[`src/rendering/CameraRenderer.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/rendering/CameraRenderer.ts)<br>[`tests/unit/Camera.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/Camera.test.ts) | World coordinates are logical units independent of device screen pixels.<br>Camera clamps position inside $[W_{\text{half}}, W_{\text{world}} - W_{\text{half}}]$ and $[H_{\text{half}}, H_{\text{world}} - H_{\text{half}}]$.<br>`worldToScreen` and `screenToWorld` conversions verified.<br>`getVisibleTileRange` computes culling bounds with 1-tile padding. |
-| **Load a bundled tile map and draw ground/decorative layers** | **PASS** | [`assets/maps/village_outskirts.json`](file:///f:/Codes/Projects/games/Dungeonbound/assets/maps/village_outskirts.json)<br>[`src/game/world/TileMapParser.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/world/TileMapParser.ts)<br>[`src/game/content/definitions/maps.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/content/definitions/maps.ts)<br>[`src/rendering/GameCanvas.tsx`](file:///f:/Codes/Projects/games/Dungeonbound/src/rendering/GameCanvas.tsx) | Authored 30×20 tile map with Ground layer (grass, dirt road, stone plaza, water) and Decoration layer (flowers, bushes, border stones).<br>Parsed and validated at boot time via `TileMapParser`.<br>Drawn via `@shopify/react-native-skia` with dynamic tile iteration based on visible bounds. |
-| **Add placeholder player sprite and animation state** | **PASS** | [`src/game/domain/entities/PlayerEntity.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/domain/entities/PlayerEntity.ts)<br>[`src/rendering/GameCanvas.tsx`](file:///f:/Codes/Projects/games/Dungeonbound/src/rendering/GameCanvas.tsx) | Hero player entity holds position, facing direction (`up`, `down`, `left`, `right`), move speed ($120\text{ units/s}$), and health.<br>Rendered on canvas with shadow, body, crest, and directional indicator facing current movement orientation. |
-| **Add basic HUD and touch input visuals** | **PASS** | [`app/game/[saveSlotId].tsx`](file:///f:/Codes/Projects/games/Dungeonbound/app/game/[saveSlotId].tsx)<br>[`src/input/TouchInputAdapter.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/input/TouchInputAdapter.ts) | Top HUD displays player HP bar ($HP/\text{MaxHP}$), map name, and world coordinates.<br>Directional touch pad provides movement inputs with visual active states.<br>Pause modal halts simulation and displays step counts, elapsed time, and camera focus. |
+| Implement main menu and gameplay route | **PASS** | [`app/index.tsx`](../../app/index.tsx), [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx) | Main menu renders title and navigation buttons. Gameplay route loads the map, boots `GameRuntime`, and mounts HUD plus touch controls. |
+| Build `GameRuntime` lifecycle: create, start, pause, resume, stop, dispose | **PASS** | [`src/game/engine/GameRuntime.ts`](../../src/game/engine/GameRuntime.ts), [`src/game/engine/GameSession.ts`](../../src/game/engine/GameSession.ts), [`tests/unit/GameRuntime.test.ts`](../../tests/unit/GameRuntime.test.ts) | Lifecycle methods are implemented and covered by unit tests. |
+| Implement fixed-step loop and frame-delta clamping | **PASS** | [`src/game/engine/GameLoop.ts`](../../src/game/engine/GameLoop.ts), [`tests/unit/GameLoop.test.ts`](../../tests/unit/GameLoop.test.ts) | Fixed step is 1/60 s, frame delta is clamped to 0.1 s, and catch-up is capped at 5 steps. Pause/resume resets the timestamp baseline. |
+| Implement logical world coordinates and camera transform | **PASS** | [`src/game/world/Camera.ts`](../../src/game/world/Camera.ts), [`src/rendering/CameraRenderer.ts`](../../src/rendering/CameraRenderer.ts), [`tests/unit/Camera.test.ts`](../../tests/unit/Camera.test.ts) | World-to-screen conversion, clamping, and visible tile range are unit-tested. Visual smoothness was not verified on a device. |
+| Load a bundled tile map and draw ground/decorative layers | **PASS** | [`assets/maps/village_outskirts.json`](../../assets/maps/village_outskirts.json), [`src/game/world/TileMapParser.ts`](../../src/game/world/TileMapParser.ts), [`src/game/content/definitions/maps.ts`](../../src/game/content/definitions/maps.ts), [`src/rendering/GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx) | Map is authored data, validated by the parser, and rendered dynamically with culling. |
+| Add placeholder player sprite and animation state | **PARTIAL** | [`src/game/domain/entities/PlayerEntity.ts`](../../src/game/domain/entities/PlayerEntity.ts), [`src/rendering/GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx) | A placeholder sprite with facing indicator exists. There is no animation state (for example idle/walk frame or animation clock), so this task is not fully complete. |
+| Add basic HUD and touch input visuals | **PASS** | [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx), [`src/input/TouchInputAdapter.ts`](../../src/input/TouchInputAdapter.ts) | HUD shows map name, coordinates, and HP. D-pad and pause modal are present. |
+
+### Deliverable
+
+> Player placeholder rendered over a scrolling tile map.
+
+**Delivered with the per-frame re-render caveat below.** The renderer consumes a projection and draws a data-driven map with camera culling.
 
 ---
 
-## 2. Phase 1 Acceptance Criteria Evaluation
+## 2. Phase 1 acceptance criteria
 
-### Criterion 1: Map is rendered from data, not hand-drawn JSX per tile
-- **Verdict:** **PASS**
-- **Evidence:** [`assets/maps/village_outskirts.json`](file:///f:/Codes/Projects/games/Dungeonbound/assets/maps/village_outskirts.json) contains raw tile data arrays. [`TileMapParser.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/world/TileMapParser.ts) validates and constructs immutable `MapDefinition`. [`GameCanvas.tsx`](file:///f:/Codes/Projects/games/Dungeonbound/src/rendering/GameCanvas.tsx) iterates dynamically over `map.layers` and maps tile IDs to palette colors within culled visible bounds. No hardcoded per-tile JSX elements exist.
+| # | Criterion | Verdict | Evidence |
+| --- | --- | :---: | --- |
+| 1 | Map is rendered from data, not hand-drawn JSX per tile | **PASS** | `village_outskirts.json` holds tile arrays; `TileMapParser` validates them into `MapDefinition`; `GameCanvas` iterates layers and visible bounds. |
+| 2 | Camera follows player without visible jitter | **PASS (logic only)** | `Camera.followTarget()` centers on the player with world clamping; `Camera.test.ts` covers center, edges, and overflow. Device-level visual smoothness remains unverified. |
+| 3 | Opening pause menu stops simulation updates | **PASS** | `handleTogglePause()` calls `runtime.pause()`; `GameLoop.step()` skips `onFixedUpdate` while paused. Covered by `GameLoop.test.ts` and `GameRuntime.test.ts`. |
+| 4 | Gameplay does not trigger React re-render on each frame | **FAIL** | See detailed evidence below. |
 
-### Criterion 2: Camera follows player without visible jitter
-- **Verdict:** **PASS**
-- **Evidence:** [`src/game/world/Camera.ts`](file:///f:/Codes/Projects/games/Dungeonbound/src/game/world/Camera.ts) centers on player world coordinates with boundary clamping $[W_{\text{half}}, W_{\text{world}} - W_{\text{half}}]$. Verified in [`tests/unit/Camera.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/Camera.test.ts) across center, edges, and boundary overflows.
+### Criterion 4 failure evidence
 
-### Criterion 3: Opening pause menu stops simulation updates
-- **Verdict:** **PASS**
-- **Evidence:** Opening the pause modal calls `runtime.pause()`, which suspends `GameLoop.ts` fixed updates (`onFixedUpdate` is bypassed while paused). Verified by test case `'stops fixed updates while paused and resumes cleanly'` in [`tests/unit/GameLoop.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/GameLoop.test.ts) and [`tests/unit/GameRuntime.test.ts`](file:///f:/Codes/Projects/games/Dungeonbound/tests/unit/GameRuntime.test.ts).
+The simulation is decoupled from React state updates, but the render projection is not:
 
-### Criterion 4: Gameplay does not trigger React re-render on each frame
-- **Verdict:** **PASS**
-- **Evidence:** Fixed updates advance internal `GameSession` state at $60\text{ FPS}$ without triggering React `setState`. `GameRuntime` decouples the simulation loop from React reconciliation; `app/game/[saveSlotId].tsx` only consumes external projections through a controlled subscription.
+1. [`GameLoop.step()`](../../src/game/engine/GameLoop.ts) calls `this.callbacks.onRender(nowMs)` on every frame.
+2. [`GameRuntime`](../../src/game/engine/GameRuntime.ts) wires `onRender: () => this.publishProjection()`.
+3. [`publishProjection()`](../../src/game/engine/GameRuntime.ts) notifies every subscriber on each call.
+4. [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx) subscribes with `setProjection(newProj)`.
 
----
+Therefore React state is updated and the gameplay screen re-renders every frame. The original audit incorrectly treated the absence of `setState` inside the fixed update as sufficient proof; the render callback path invalidates that claim.
 
-## 3. Test & Verification Run Log
-
-Commands executed locally on Windows host (`Node.js v24.16.0`, `npm 11.13.0`):
-
-1. **Static Typecheck:**
-   ```bash
-   npm run typecheck
-   # Output: tsc --noEmit -> Exit 0 (0 errors)
-   ```
-
-2. **Code Linting:**
-   ```bash
-   npm run lint
-   # Output: eslint . -> Exit 0 (0 warnings, 0 errors)
-   ```
-
-3. **Automated Unit Tests:**
-   ```bash
-   npm test
-   # Output: 6 passed test suites, 27 passed tests, 0 failures (Exit 0)
-   # - tests/unit/Vector2.test.ts (8 tests)
-   # - tests/unit/MovementRules.test.ts (6 tests)
-   # - tests/unit/Camera.test.ts (4 tests)
-   # - tests/unit/TileMapParser.test.ts (3 tests)
-   # - tests/unit/GameLoop.test.ts (3 tests)
-   # - tests/unit/GameRuntime.test.ts (3 tests)
-   ```
-
-4. **Android Metro Bundle Compilation:**
-   ```bash
-   npx expo export --platform android --no-bytecode
-   # Output: Bundled 1,784 modules in 4,084ms -> dist/ created successfully (Exit 0)
-   ```
-
-5. **Physical Device / Emulator Status Note:**
-   - Prebuild Android project files generated in `android/`.
-   - Physical device / emulator runtime verification was initiated via `expo run:android` during build tooling verification. Complete device performance profiling will be continuously executed as mechanics expand.
+A correct fix should keep the simulation/projection in a runtime object and expose a throttled UI-state projection (for example only on meaningful HUD changes) or use a Skia frame callback that reads runtime state directly without React state updates.
 
 ---
 
-## 4. Next Smallest Milestone
+## 3. Re-verification run log
 
-**Phase 2 — Movement, input, and collision**:
-1. Implement virtual analog joystick with configurable deadzone and normalized continuous touch vectors.
-2. Build `CollisionGrid` parser mapping solid tiles (walls, water, border stones).
-3. Implement AABB foot collision box for characters separate from visual sprite dimensions.
-4. Add slide-along-wall collision response to prevent clipping or sticking on corners.
+Executed in a clean detached worktree of `main` at `ba66589`, with the existing `node_modules` linked.
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | PASS — no errors |
+| `npm test -- --runInBand` | PASS — 6 suites, 27 tests |
+| `npm run lint` | PASS — but `eslint.config.mjs` still has no rules, so this is a weak signal |
+| `npx expo export --platform android --no-bytecode` | PASS — Android bundle exported (1,077 modules) |
+
+Device/emulator runtime verification was **not** completed. An earlier `npm run android` attempt failed in the local Android toolchain during Skia CMake configuration (NDK 27.1.12297006 with CMake 3.22.1: linker rejects `-z`, `--no-rosegment`, and `--no-undefined-version`). No device-performance or visual-jitter claim is made.
+
+---
+
+## 4. Required follow-up
+
+1. Fix the per-frame React re-render before treating Phase 1 as fully accepted.
+2. Add an explicit animation state to the player entity or document that the placeholder intentionally has none.
+3. Configure meaningful ESLint rules and Prettier.
+4. Fix the local Android CMake/NDK toolchain, then verify camera smoothness and pause behavior on a device.
+
+After those items, the next milestone is Phase 2 — movement, input, and collision.
