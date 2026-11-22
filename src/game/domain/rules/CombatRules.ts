@@ -37,6 +37,10 @@ export const DEFAULT_ENEMY_ATTACK: AttackDefinition = Object.freeze({
   knockback: 18,
 });
 
+/** Invulnerability windows agreed in ADR-009 (phase 3 combat). */
+export const ENEMY_INVULNERABLE_DURATION_MS = 280;
+export const PLAYER_INVULNERABLE_DURATION_MS = 400;
+
 export interface HitboxRect {
   readonly minX: number;
   readonly minY: number;

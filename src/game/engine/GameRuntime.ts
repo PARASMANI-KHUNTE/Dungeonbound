@@ -1,5 +1,11 @@
 import { getItemDefinition } from '../content/definitions/items';
 import { validateSaveSnapshot } from '../application/SaveSnapshotValidator';
+import {
+  CombatFeedback,
+  isCombatFeedbackEvent,
+  noopCombatFeedback,
+} from '../application/CombatFeedback';
+import { DomainEvent } from '../domain/events/DomainEvents';
 import { CURRENT_SAVE_VERSION, SaveSnapshot } from '../domain/repositories/SaveRepository';
 import { TouchInputAdapter } from '../../input/TouchInputAdapter';
 import {
@@ -26,6 +32,8 @@ import { EquipmentSlot } from '../domain/items/ItemTypes';
 import {
   DEFAULT_ENEMY_ATTACK,
   DEFAULT_PLAYER_ATTACK,
+  ENEMY_INVULNERABLE_DURATION_MS,
+  PLAYER_INVULNERABLE_DURATION_MS,
   calculateAttackHitbox,
   calculateDamage,
   calculateKnockbackPosition,
@@ -63,13 +71,16 @@ export class GameRuntime {
   private lastUiPublishMs = 0;
   private cachedProjection: RenderProjection | null = null;
   private latestNotification: string | null = null;
+  private readonly feedback: CombatFeedback;
 
   constructor(
     saveSlotId: string,
     map: MapDefinition,
     viewportWidth: number,
-    viewportHeight: number
+    viewportHeight: number,
+    feedback: CombatFeedback = noopCombatFeedback
   ) {
+    this.feedback = feedback;
     const worldWidth = map.widthInTiles * map.tileSize;
     const worldHeight = map.heightInTiles * map.tileSize;
 
@@ -243,9 +254,12 @@ export class GameRuntime {
       currentHealth: newHealth,
       animation: newHealth <= 0 ? { state: 'dead', frame: 0, timerMs: 0 } : this.session.player.animation,
     };
-    this.session.eventQueue.push({ type: 'PLAYER_DAMAGED', amount, sourceId });
+    this.pushEvent({ type: 'PLAYER_DAMAGED', amount, sourceId });
     if (newHealth <= 0) {
-      this.session.eventQueue.push({ type: 'PLAYER_DIED' });
+      this.pushEvent({ type: 'PLAYER_DIED' });
+      // Death is an explicit pause: the loop stops stepping and elapsed time
+      // freezes until respawnPlayer() resumes the session.
+      this.pause();
     }
     this.publishUi(true);
   }
@@ -287,7 +301,7 @@ export class GameRuntime {
     this.session.playerAttackCooldownMs = 0;
     this.session.playerInvulnerableUntilMs = 0;
     this.session.camera.followTarget(respawnPos);
-    this.session.eventQueue.push({ type: 'PLAYER_RESPAWNED', position: respawnPos });
+    this.pushEvent({ type: 'PLAYER_RESPAWNED', position: respawnPos });
 
     this.cachedProjection = null;
     if (this.session.isPaused) {
@@ -387,7 +401,7 @@ export class GameRuntime {
     };
 
     this.latestNotification = result.effectMessage;
-    this.session.eventQueue.push({
+    this.pushEvent({
       type: 'ITEM_USED',
       itemId: slot.item.itemId,
       effectMessage: result.effectMessage,
@@ -429,7 +443,7 @@ export class GameRuntime {
     const itemDef = getItemDefinition(slot.item.itemId);
     this.latestNotification = `Equipped ${itemDef?.name ?? slot.item.itemId}`;
     if (itemDef?.slot) {
-      this.session.eventQueue.push({
+      this.pushEvent({
         type: 'ITEM_EQUIPPED',
         itemId: slot.item.itemId,
         slot: itemDef.slot,
@@ -470,7 +484,7 @@ export class GameRuntime {
 
     const itemDef = getItemDefinition(equippedItem.itemId);
     this.latestNotification = `Unequipped ${itemDef?.name ?? equippedItem.itemId}`;
-    this.session.eventQueue.push({
+    this.pushEvent({
       type: 'ITEM_UNEQUIPPED',
       itemId: equippedItem.itemId,
       slot,
@@ -577,11 +591,9 @@ export class GameRuntime {
   fixedUpdate(deltaSeconds: number): void {
     if (this.session.isPaused || this.isDisposed) return;
 
-    const deltaMs = deltaSeconds * 1000;
-    this.session.elapsedTimeSeconds += deltaSeconds;
-    const nowMs = this.session.elapsedTimeSeconds * 1000;
-
-    // Check player death
+    // A defeated player freezes the simulation entirely. damagePlayer() pauses
+    // on the killing blow; this guard also covers any other path that leaves the
+    // player at zero health, and it runs before elapsed time is advanced.
     if (this.session.player.currentHealth <= 0) {
       if (this.session.player.animation.state !== 'dead') {
         this.session.player = updatePlayerAnimation(this.session.player, {
@@ -590,8 +602,13 @@ export class GameRuntime {
           timerMs: 0,
         });
       }
+      this.pause();
       return;
     }
+
+    const deltaMs = deltaSeconds * 1000;
+    this.session.elapsedTimeSeconds += deltaSeconds;
+    const nowMs = this.session.elapsedTimeSeconds * 1000;
 
     // 1. Process discrete player attack commands from input adapter
     const inputSnapshot = this.inputAdapter.readSnapshot();
@@ -672,7 +689,7 @@ export class GameRuntime {
           this.session.pickups.delete(pickupId);
           const itemDef = getItemDefinition(pickup.itemId);
           this.latestNotification = `Collected ${itemDef?.name ?? pickup.itemId}`;
-          this.session.eventQueue.push({
+          this.pushEvent({
             type: 'ITEM_COLLECTED',
             pickupId,
             itemId: pickup.itemId,
@@ -791,12 +808,12 @@ export class GameRuntime {
           currentHealth: newHealth,
           state: isDead ? 'dead' : 'hurt',
           stateTimerMs: 0,
-          invulnerableUntilMs: nowMs + 280,
+          invulnerableUntilMs: nowMs + ENEMY_INVULNERABLE_DURATION_MS,
           transform: createTransform(resolvedKnockback, enemy.transform.facing),
         });
 
         this.session.enemies.set(id, updated);
-        this.session.eventQueue.push({
+        this.pushEvent({
           type: 'ENEMY_DAMAGED',
           enemyId: id,
           amount: damage,
@@ -804,7 +821,7 @@ export class GameRuntime {
         });
 
         if (isDead) {
-          this.session.eventQueue.push({
+          this.pushEvent({
             type: 'ENEMY_DEFEATED',
             enemyId: id,
             enemyType: enemy.enemyType,
@@ -835,7 +852,7 @@ export class GameRuntime {
                 ...updatedPlayer,
                 currentHealth: updatedPlayer.derivedStats.maxHealth,
               };
-              this.session.eventQueue.push({
+              this.pushEvent({
                 type: 'LEVEL_UP',
                 oldLevel: xpResult.oldLevel,
                 newLevel: xpResult.newLevel,
@@ -850,7 +867,7 @@ export class GameRuntime {
             const drops = rollLoot(enemy.enemyType, enemy.transform.position);
             for (const drop of drops) {
               this.session.pickups.set(drop.id, drop);
-              this.session.eventQueue.push({
+              this.pushEvent({
                 type: 'ITEM_DROPPED',
                 pickupId: drop.id,
                 itemId: drop.itemId,
@@ -885,7 +902,7 @@ export class GameRuntime {
       );
 
       const newHealth = Math.max(0, this.session.player.currentHealth - damage);
-      this.session.playerInvulnerableUntilMs = nowMs + 500;
+      this.session.playerInvulnerableUntilMs = nowMs + PLAYER_INVULNERABLE_DURATION_MS;
 
       // Apply knockback to player
       const knockbackPos = calculateKnockbackPosition(
@@ -910,17 +927,25 @@ export class GameRuntime {
         transform: createTransform(resolvedKnockback, this.session.player.transform.facing),
       };
 
-      this.session.eventQueue.push({
+      this.pushEvent({
         type: 'PLAYER_DAMAGED',
         amount: damage,
         sourceId: enemy.id,
       });
 
       if (isDead) {
-        this.session.eventQueue.push({ type: 'PLAYER_DIED' });
+        this.pushEvent({ type: 'PLAYER_DIED' });
       }
 
       this.publishUi(true); // Immediate UI update on player damage
+    }
+  }
+
+  /** Append a domain event and forward combat events to the feedback port. */
+  private pushEvent(event: DomainEvent): void {
+    this.session.eventQueue = [...this.session.eventQueue, event];
+    if (isCombatFeedbackEvent(event)) {
+      this.feedback.play(event);
     }
   }
 
