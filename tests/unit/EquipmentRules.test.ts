@@ -19,7 +19,7 @@ describe('EquipmentRules', () => {
   describe('Equip validation & swapping', () => {
     it('equips a weapon from inventory to equipment slot', () => {
       let inv = createEmptyInventory(4);
-      let eq = createEmptyEquipment();
+      const eq = createEmptyEquipment();
 
       inv = addItemToInventory(inv, { itemId: 'rusty_sword', quantity: 1 }, getItemDefinition)
         .updatedInventory;

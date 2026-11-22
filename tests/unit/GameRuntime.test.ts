@@ -55,6 +55,28 @@ describe('GameRuntime', () => {
     runtime.dispose();
   });
 
+  it('resets held input when paused or stopped', () => {
+    const runtime = new GameRuntime('test_slot', testMap, 400, 300);
+
+    runtime.input.setMovement(1, 1);
+    runtime.input.setAttacking(true);
+    runtime.pause();
+    expect(runtime.input.readSnapshot()).toMatchObject({
+      moveVector: { x: 0, y: 0 },
+      isAttacking: false,
+    });
+
+    runtime.input.setMovement(-1, 0);
+    runtime.input.setDodging(true);
+    runtime.stop();
+    expect(runtime.input.readSnapshot()).toMatchObject({
+      moveVector: { x: 0, y: 0 },
+      isDodging: false,
+    });
+
+    runtime.dispose();
+  });
+
   it('notifies projection subscribers when active', () => {
     const runtime = new GameRuntime('test_slot', testMap, 400, 300);
     const projections: any[] = [];

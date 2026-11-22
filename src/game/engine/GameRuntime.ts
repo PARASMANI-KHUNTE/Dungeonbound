@@ -22,7 +22,6 @@ import {
   updatePlayerAnimation,
   updatePlayerTransform,
 } from '../domain/entities/PlayerEntity';
-import { DomainEvent } from '../domain/events/DomainEvents';
 import { EquipmentSlot } from '../domain/items/ItemTypes';
 import {
   DEFAULT_ENEMY_ATTACK,
@@ -165,6 +164,9 @@ export class GameRuntime {
     if (this.isDisposed) return;
     this.session.isPaused = true;
     this.loop.pause();
+    // A paused game must never retain a held joystick/D-pad vector: on resume the
+    // simulation would otherwise receive stale input that no touch is producing.
+    this.inputAdapter.reset();
     this.publishRender();
     this.publishUi(true);
   }
@@ -180,6 +182,7 @@ export class GameRuntime {
   stop(): void {
     if (this.isDisposed) return;
     this.loop.stop();
+    this.inputAdapter.reset();
   }
 
   dispose(): void {

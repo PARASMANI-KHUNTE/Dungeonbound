@@ -87,7 +87,7 @@ export default function GameplayScreen() {
       runtime.dispose();
       runtimeRef.current = null;
     };
-  }, [saveSlotId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [saveSlotId]);
 
   // Resize camera viewport on dimension change
   useEffect(() => {
