@@ -106,4 +106,16 @@ describe('SaveSnapshotValidator (Acceptance Criteria)', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.includes('cannot be equipped in "head"'))).toBe(true);
   });
+
+  it('rejects malformed world flags and quest state', () => {
+    const badFlags = {
+      ...validSnapshot,
+      worldFlags: { nested: { unexpected: true } },
+      questState: [],
+    };
+    const res = validateSaveSnapshot(badFlags);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('unsupported value'))).toBe(true);
+    expect(res.errors.some((e) => e.includes('questState must be a plain object'))).toBe(true);
+  });
 });

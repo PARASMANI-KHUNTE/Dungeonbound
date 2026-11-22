@@ -44,6 +44,11 @@ describe('Phase 5 Persistence Integration (Acceptance Criteria)', () => {
     runtime1.triggerPlayerAttack();
     runtime1.fixedUpdate(0.08); // strike enemy
 
+    // Quest and world state must be part of the persisted session too.
+    runtime1.setWorldFlag('boss_slain', true);
+    runtime1.setWorldFlag('goblins_slain', 2);
+    runtime1.setQuestState('main_quest', { status: 'active', progress: 1 });
+
     // Capture state before shutdown
     const preShutdownLevel = runtime1.currentSession.player.level;
     const preShutdownXp = runtime1.currentSession.player.experience;
@@ -53,6 +58,8 @@ describe('Phase 5 Persistence Integration (Acceptance Criteria)', () => {
 
     // Save snapshot to repository
     const snapshotToSave = runtime1.createSaveSnapshot();
+    expect(snapshotToSave.worldFlags).toEqual({ boss_slain: true, goblins_slain: 2 });
+    expect(snapshotToSave.questState).toEqual({ main_quest: { status: 'active', progress: 1 } });
     await repo.saveSnapshot('slot_1', snapshotToSave);
 
     // 2. SIMULATE FORCE-CLOSE: Dispose session 1 completely
@@ -79,6 +86,13 @@ describe('Phase 5 Persistence Integration (Acceptance Criteria)', () => {
     // Verify inventory state survived with decremented potion
     const potionSlot = runtime2.currentSession.player.inventory[potionIndex];
     expect(potionSlot.item?.quantity).toBe(1);
+
+    // Quest state and world flags survived both the repository and runtime.
+    expect(loadedSnapshot!.worldFlags).toEqual({ boss_slain: true, goblins_slain: 2 });
+    expect(loadedSnapshot!.questState).toEqual({ main_quest: { status: 'active', progress: 1 } });
+    expect(runtime2.getWorldFlag('boss_slain')).toBe(true);
+    expect(runtime2.getWorldFlag('goblins_slain')).toBe(2);
+    expect(runtime2.getQuestState('main_quest')).toEqual({ status: 'active', progress: 1 });
 
     runtime2.dispose();
   });

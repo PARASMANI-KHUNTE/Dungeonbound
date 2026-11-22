@@ -18,6 +18,7 @@ import { VirtualJoystick } from '@/input/VirtualJoystick';
 import { Vector2 } from '@/game/domain/value-objects/Vector2';
 import { VILLAGE_OUTSKIRTS_MAP } from '@/game/content/definitions/maps';
 import { InventoryModal } from '@/ui/components/InventoryModal';
+import { SaveSessionGuard } from '@/game/application/SaveSessionGuard';
 import { getSaveRepository } from '@/platform/persistence/database';
 
 export default function GameplayScreen() {
@@ -30,62 +31,74 @@ export default function GameplayScreen() {
   const [controlMode, setControlMode] = useState<'JOYSTICK' | 'DPAD'>('JOYSTICK');
   const [inventoryVisible, setInventoryVisible] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const saveGuardRef = useRef<SaveSessionGuard | null>(null);
 
   // Throttled UI State (10 Hz cadence or on discrete events - NO 60 FPS React re-renders!)
   const [uiState, setUiState] = useState<UiProjection | null>(null);
 
-  // Initialize runtime and hydrate save slot if present
+  // Initialize runtime and hydrate save slot if present. Gameplay and all
+  // save writes are gated on a successful load so a corrupt save is never
+  // silently replaced by starter state.
   useEffect(() => {
-    const runtime = new GameRuntime(
-      saveSlotId || 'slot_1',
-      VILLAGE_OUTSKIRTS_MAP,
-      width,
-      height
-    );
-    runtimeRef.current = runtime;
+    const slotId = saveSlotId || 'slot_1';
+    let cancelled = false;
+    let unsubscribeUi: (() => void) | null = null;
+    let appStateSub: ReturnType<typeof AppState.addEventListener> | null = null;
 
-    // Hydrate existing save slot
+    const runtime = new GameRuntime(slotId, VILLAGE_OUTSKIRTS_MAP, width, height);
+    runtimeRef.current = runtime;
+    setRuntimeReady(false);
+    setLoadError(null);
+
     (async () => {
       try {
         const repo = await getSaveRepository();
-        const existing = await repo.loadSnapshot(saveSlotId || 'slot_1');
-        if (existing) {
-          runtime.loadFromSnapshot(existing);
+        const guard = new SaveSessionGuard(repo, slotId);
+        saveGuardRef.current = guard;
+        const result = await guard.load((snapshot) => runtime.loadFromSnapshot(snapshot));
+        if (!result.ok) {
+          if (!cancelled) setLoadError(result.error ?? 'Unable to load save snapshot');
+          return;
         }
       } catch (err) {
-        console.warn('Could not load existing save snapshot', err);
+        if (!cancelled) {
+          setLoadError(err instanceof Error ? err.message : String(err));
+        }
+        return;
       }
+
+      if (cancelled) return;
+
+      // Subscribe ONLY to throttled UI projection (100ms throttle)
+      unsubscribeUi = runtime.subscribeUI((newUi) => {
+        setUiState(newUi);
+      }, 100);
+
+      runtime.start();
+      setRuntimeReady(true);
+
+      // App state listener for background pause and auto-save
+      const handleAppStateChange = async (nextState: AppStateStatus) => {
+        if (nextState.match(/inactive|background/)) {
+          runtime.pause();
+          const saveResult = await saveGuardRef.current?.save(() => runtime.createSaveSnapshot());
+          if (saveResult && !saveResult.ok) {
+            console.warn('Background auto-save failed', saveResult.error);
+          }
+        }
+      };
+
+      appStateSub = AppState.addEventListener('change', handleAppStateChange);
     })();
 
-    // Subscribe ONLY to throttled UI projection (100ms throttle)
-    const unsubscribeUi = runtime.subscribeUI((newUi) => {
-      setUiState(newUi);
-    }, 100);
-
-    runtime.start();
-    setRuntimeReady(true);
-
-    // App state listener for background pause and auto-save
-    const handleAppStateChange = async (nextState: AppStateStatus) => {
-      if (nextState.match(/inactive|background/)) {
-        runtime.pause();
-        try {
-          const repo = await getSaveRepository();
-          const snapshot = runtime.createSaveSnapshot();
-          await repo.saveSnapshot(saveSlotId || 'slot_1', snapshot);
-        } catch (err) {
-          console.warn('Background auto-save failed', err);
-        }
-      }
-    };
-
-    const sub = AppState.addEventListener('change', handleAppStateChange);
-
     return () => {
-      sub.remove();
-      unsubscribeUi();
+      cancelled = true;
+      appStateSub?.remove();
+      unsubscribeUi?.();
       runtime.dispose();
       runtimeRef.current = null;
+      saveGuardRef.current = null;
     };
   }, [saveSlotId]);
 
@@ -138,15 +151,15 @@ export default function GameplayScreen() {
 
   const handleSaveGame = useCallback(async () => {
     const runtime = runtimeRef.current;
-    if (!runtime) return;
-    try {
-      const repo = await getSaveRepository();
-      const snapshot = runtime.createSaveSnapshot();
-      await repo.saveSnapshot(saveSlotId || 'slot_1', snapshot);
+    const guard = saveGuardRef.current;
+    if (!runtime || !guard) return;
+
+    const result = await guard.save(() => runtime.createSaveSnapshot());
+    if (result.ok) {
       setSaveStatus('Game Progress Saved!');
       setTimeout(() => setSaveStatus(null), 3000);
-    } catch (err: any) {
-      setSaveStatus(`Save failed: ${err.message}`);
+    } else {
+      setSaveStatus(`Save failed: ${result.error}`);
     }
   }, [saveSlotId]);
 
@@ -154,6 +167,24 @@ export default function GameplayScreen() {
     runtimeRef.current?.dispose();
     router.replace('/');
   }, [router]);
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>SAVE DATA COULD NOT BE LOADED</Text>
+        <Text style={[styles.loadingText, { fontSize: 13, marginTop: 12 }]}>{loadError}</Text>
+        <Text style={[styles.loadingText, { fontSize: 12, marginTop: 12 }]}>
+          Your existing save was left untouched. No save will be written for this slot.
+        </Text>
+        <TouchableOpacity
+          style={[styles.modalMenuBtn, { marginTop: 24 }]}
+          onPress={handleReturnToMenu}
+        >
+          <Text style={styles.modalBtnText}>RETURN TO MENU</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   if (!runtimeReady || !runtimeRef.current || !uiState) {
     return (

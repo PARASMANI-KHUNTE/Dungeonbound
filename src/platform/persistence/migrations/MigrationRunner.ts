@@ -10,6 +10,16 @@ export async function initMigrationTable(db: DatabaseConnection): Promise<void> 
       name TEXT NOT NULL
     );
   `);
+
+  // Older app versions created this table without the `name` column. CREATE
+  // TABLE IF NOT EXISTS is a no-op for those installs, so heal the legacy
+  // schema before the INSERT below can reference a missing column.
+  const columns = await db.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(schema_migrations);'
+  );
+  if (!columns.some((column) => column.name === 'name')) {
+    await db.execAsync("ALTER TABLE schema_migrations ADD COLUMN name TEXT NOT NULL DEFAULT '';");
+  }
 }
 
 export async function getCurrentSchemaVersion(db: DatabaseConnection): Promise<number> {

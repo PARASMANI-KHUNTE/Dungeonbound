@@ -6,8 +6,10 @@ interface TableRow {
 
 export class MockDatabaseConnection implements DatabaseConnection {
   public tables: Map<string, TableRow[]> = new Map();
+  public tableColumns: Map<string, string[]> = new Map();
   public failNextRun = false;
   public failNextTransaction = false;
+  public failRunOnSqlPattern: RegExp | null = null;
 
   private cloneState(): Map<string, TableRow[]> {
     const copy = new Map<string, TableRow[]>();
@@ -24,6 +26,50 @@ export class MockDatabaseConnection implements DatabaseConnection {
     this.tables = savedState;
   }
 
+  private parseSqlValues(valuesText: string, params: unknown[]): unknown[] {
+    const values: unknown[] = [];
+    let paramIndex = 0;
+    let i = 0;
+
+    while (i < valuesText.length) {
+      while (/\s/.test(valuesText[i] ?? '')) i++;
+      if (i >= valuesText.length) break;
+
+      if (valuesText[i] === '?') {
+        values.push(params[paramIndex++]);
+        i++;
+      } else if (valuesText[i] === "'") {
+        let text = '';
+        i++;
+        while (i < valuesText.length) {
+          if (valuesText[i] === "'" && valuesText[i + 1] === "'") {
+            text += "'";
+            i += 2;
+            continue;
+          }
+          if (valuesText[i] === "'") {
+            i++;
+            break;
+          }
+          text += valuesText[i++];
+        }
+        values.push(text);
+      } else {
+        const start = i;
+        while (i < valuesText.length && valuesText[i] !== ',') i++;
+        const token = valuesText.slice(start, i).trim();
+        if (/^-?\d+(\.\d+)?$/.test(token)) values.push(Number(token));
+        else if (/^NULL$/i.test(token)) values.push(null);
+        else values.push(token);
+      }
+
+      while (/\s/.test(valuesText[i] ?? '')) i++;
+      if (valuesText[i] === ',') i++;
+    }
+
+    return values;
+  }
+
   async execAsync(sql: string): Promise<void> {
     // Basic table creation parser for known tables
     const statements = sql
@@ -32,11 +78,32 @@ export class MockDatabaseConnection implements DatabaseConnection {
       .filter((s) => s.length > 0);
 
     for (const stmt of statements) {
-      const match = stmt.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)/i);
-      if (match) {
-        const tableName = match[1];
+      const createMatch = stmt.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\(([\s\S]+)\)/i);
+      if (createMatch) {
+        const tableName = createMatch[1];
         if (!this.tables.has(tableName)) {
           this.tables.set(tableName, []);
+        }
+        const columns = createMatch[2]
+          .split(/\r?\n/)
+          .map((line) => line.trim().replace(/,$/, '').split(/\s+/)[0]?.replace(/["`]/g, ''))
+          .filter(
+            (column) =>
+              column && !/^(CONSTRAINT|FOREIGN|PRIMARY|UNIQUE|CHECK)$/i.test(column)
+          );
+        if (!this.tableColumns.has(tableName)) {
+          this.tableColumns.set(tableName, columns);
+        }
+        continue;
+      }
+
+      const alterMatch = stmt.match(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)/i);
+      if (alterMatch) {
+        const tableName = alterMatch[1];
+        const columnName = alterMatch[2];
+        const columns = this.tableColumns.get(tableName) ?? [];
+        if (!columns.includes(columnName)) {
+          this.tableColumns.set(tableName, [...columns, columnName]);
         }
       }
     }
@@ -45,6 +112,10 @@ export class MockDatabaseConnection implements DatabaseConnection {
   async runAsync(sql: string, ...params: unknown[]): Promise<RunResult> {
     if (this.failNextRun) {
       this.failNextRun = false;
+      throw new Error('Simulated SQLite run error');
+    }
+    if (this.failRunOnSqlPattern?.test(sql)) {
+      this.failRunOnSqlPattern = null;
       throw new Error('Simulated SQLite run error');
     }
 
@@ -62,9 +133,10 @@ export class MockDatabaseConnection implements DatabaseConnection {
       }
       const table = this.tables.get(tableName)!;
 
+      const values = this.parseSqlValues(insertMatch[3], params);
       const row: TableRow = {};
       cols.forEach((col, idx) => {
-        row[col] = params[idx];
+        row[col] = values[idx];
       });
 
       const isReplace = /INSERT\s+OR\s+REPLACE/i.test(trimmed);
@@ -181,6 +253,13 @@ export class MockDatabaseConnection implements DatabaseConnection {
   async getAllAsync<T>(sql: string, ...params: unknown[]): Promise<T[]> {
     const trimmed = sql.trim();
 
+    // PRAGMA table_info(<table>) — used by migration self-healing.
+    const pragmaMatch = trimmed.match(/^PRAGMA\s+table_info\s*\(\s*'?(\w+)'?\s*\)\s*;?$/i);
+    if (pragmaMatch) {
+      const columns = this.tableColumns.get(pragmaMatch[1]) ?? [];
+      return columns.map((name) => ({ name })) as unknown as T[];
+    }
+
     // SELECT MAX(version) FROM schema_migrations
     if (/SELECT\s+MAX\(version\)\s+AS\s+max_version\s+FROM\s+schema_migrations/i.test(trimmed)) {
       const table = this.tables.get('schema_migrations') ?? [];
@@ -220,24 +299,34 @@ export class MockDatabaseConnection implements DatabaseConnection {
       }) as unknown as T[];
     }
 
-    // Generic SELECT FROM <table> WHERE <col> = ?
-    const genericMatch = trimmed.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY.+)?$/i);
+    // Generic SELECT FROM <table> WHERE <col> = ? with column projection.
+    const selectSql = trimmed.replace(/;$/, '');
+    const genericMatch = selectSql.match(
+      /SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY.+)?$/i
+    );
     if (genericMatch) {
+      const columnsText = genericMatch[1].trim();
+      const requestedColumns =
+        columnsText === '*'
+          ? null
+          : columnsText.split(',').map((column) => column.trim().split(/\s+AS\s+/i).pop()!.trim());
       const tableName = genericMatch[2];
       const whereClause = genericMatch[3];
       const table = this.tables.get(tableName) ?? [];
 
-      if (!whereClause) {
-        return table.map((r) => ({ ...r })) as unknown as T[];
+      let matchingRows = table;
+      if (whereClause) {
+        const colMatch = whereClause.match(/(\w+)\s*=\s*\?/);
+        if (!colMatch) return [];
+        matchingRows = table.filter((row) => row[colMatch[1]] === params[0]);
       }
 
-      const colMatch = whereClause.match(/(\w+)\s*=\s*\?/);
-      if (colMatch) {
-        const col = colMatch[1];
-        const val = params[0];
-        const rows = table.filter((r) => r[col] === val);
-        return rows.map((r) => ({ ...r })) as unknown as T[];
-      }
+      return matchingRows.map((row) => {
+        if (!requestedColumns) return { ...row };
+        const projected: TableRow = {};
+        for (const column of requestedColumns) projected[column] = row[column];
+        return projected;
+      }) as unknown as T[];
     }
 
     return [];

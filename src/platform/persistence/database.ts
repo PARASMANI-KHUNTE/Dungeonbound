@@ -23,14 +23,11 @@ export async function getDatabase(dbName = DATABASE_NAME): Promise<SQLite.SQLite
 export async function initDatabase(dbName = DATABASE_NAME): Promise<SQLite.SQLiteDatabase> {
   const db = await getDatabase(dbName);
 
+  // schema_migrations is owned by MigrationRunner. Creating an older version
+  // here made clean installs fail when runMigrations inserted the name column.
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL
-    );
 
     CREATE TABLE IF NOT EXISTS save_slots (
       id TEXT PRIMARY KEY,
