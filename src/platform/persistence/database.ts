@@ -1,4 +1,6 @@
 import * as SQLite from 'expo-sqlite';
+import { DatabaseConnection } from './DatabaseConnection';
+import { SQLiteSaveRepository } from './SQLiteSaveRepository';
 
 export const DATABASE_NAME = 'dungeonbound.db';
 
@@ -119,4 +121,14 @@ export async function getPersistenceProbe(
     lastBootAt: row.last_boot_at,
     notes: row.notes,
   };
+}
+
+let saveRepoInstance: SQLiteSaveRepository | null = null;
+
+export async function getSaveRepository(dbName = DATABASE_NAME): Promise<SQLiteSaveRepository> {
+  if (!saveRepoInstance) {
+    const db = await initDatabase(dbName);
+    saveRepoInstance = new SQLiteSaveRepository(db as unknown as DatabaseConnection);
+  }
+  return saveRepoInstance;
 }

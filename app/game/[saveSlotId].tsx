@@ -18,6 +18,7 @@ import { VirtualJoystick } from '@/input/VirtualJoystick';
 import { Vector2 } from '@/game/domain/value-objects/Vector2';
 import { VILLAGE_OUTSKIRTS_MAP } from '@/game/content/definitions/maps';
 import { InventoryModal } from '@/ui/components/InventoryModal';
+import { getSaveRepository } from '@/platform/persistence/database';
 
 export default function GameplayScreen() {
   const router = useRouter();
@@ -28,11 +29,12 @@ export default function GameplayScreen() {
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [controlMode, setControlMode] = useState<'JOYSTICK' | 'DPAD'>('JOYSTICK');
   const [inventoryVisible, setInventoryVisible] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   // Throttled UI State (10 Hz cadence or on discrete events - NO 60 FPS React re-renders!)
   const [uiState, setUiState] = useState<UiProjection | null>(null);
 
-  // Initialize runtime
+  // Initialize runtime and hydrate save slot if present
   useEffect(() => {
     const runtime = new GameRuntime(
       saveSlotId || 'slot_1',
@@ -42,6 +44,19 @@ export default function GameplayScreen() {
     );
     runtimeRef.current = runtime;
 
+    // Hydrate existing save slot
+    (async () => {
+      try {
+        const repo = await getSaveRepository();
+        const existing = await repo.loadSnapshot(saveSlotId || 'slot_1');
+        if (existing) {
+          runtime.loadFromSnapshot(existing);
+        }
+      } catch (err) {
+        console.warn('Could not load existing save snapshot', err);
+      }
+    })();
+
     // Subscribe ONLY to throttled UI projection (100ms throttle)
     const unsubscribeUi = runtime.subscribeUI((newUi) => {
       setUiState(newUi);
@@ -50,10 +65,17 @@ export default function GameplayScreen() {
     runtime.start();
     setRuntimeReady(true);
 
-    // App state listener for background pause
-    const handleAppStateChange = (nextState: AppStateStatus) => {
+    // App state listener for background pause and auto-save
+    const handleAppStateChange = async (nextState: AppStateStatus) => {
       if (nextState.match(/inactive|background/)) {
         runtime.pause();
+        try {
+          const repo = await getSaveRepository();
+          const snapshot = runtime.createSaveSnapshot();
+          await repo.saveSnapshot(saveSlotId || 'slot_1', snapshot);
+        } catch (err) {
+          console.warn('Background auto-save failed', err);
+        }
       }
     };
 
@@ -113,6 +135,20 @@ export default function GameplayScreen() {
   const handleToggleControlMode = useCallback(() => {
     setControlMode((prev) => (prev === 'JOYSTICK' ? 'DPAD' : 'JOYSTICK'));
   }, []);
+
+  const handleSaveGame = useCallback(async () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    try {
+      const repo = await getSaveRepository();
+      const snapshot = runtime.createSaveSnapshot();
+      await repo.saveSnapshot(saveSlotId || 'slot_1', snapshot);
+      setSaveStatus('Game Progress Saved!');
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (err: any) {
+      setSaveStatus(`Save failed: ${err.message}`);
+    }
+  }, [saveSlotId]);
 
   const handleReturnToMenu = useCallback(() => {
     runtimeRef.current?.dispose();
@@ -292,6 +328,16 @@ export default function GameplayScreen() {
                   Enemies remaining: <Text style={styles.statVal}>{aliveEnemyCount}</Text>
                 </Text>
               </View>
+
+              {saveStatus && (
+                <View style={styles.modalSaveFeedback}>
+                  <Text style={styles.modalSaveFeedbackText}>{saveStatus}</Text>
+                </View>
+              )}
+
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={handleSaveGame}>
+                <Text style={styles.modalBtnText}>💾 SAVE PROGRESS</Text>
+              </TouchableOpacity>
 
               <TouchableOpacity style={styles.modalResumeBtn} onPress={handleTogglePause}>
                 <Text style={styles.modalBtnText}>RESUME</Text>
@@ -551,6 +597,31 @@ const styles = StyleSheet.create({
   statVal: {
     color: '#E5A93C',
     fontWeight: 'bold',
+  },
+  modalSaveFeedback: {
+    backgroundColor: '#1E3F20',
+    borderRadius: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#52B788',
+  },
+  modalSaveFeedbackText: {
+    color: '#FAF0CA',
+    fontSize: 11,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  modalSaveBtn: {
+    width: '100%',
+    backgroundColor: '#2A9D8F',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#48CAE4',
+    marginBottom: 8,
   },
   modalResumeBtn: {
     width: '100%',
