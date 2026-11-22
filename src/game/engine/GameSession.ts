@@ -1,4 +1,5 @@
 import { EnemyEntity } from '../domain/entities/EnemyEntity';
+import { PickupEntity } from '../domain/entities/PickupEntity';
 import { PlayerEntity } from '../domain/entities/PlayerEntity';
 import { DomainEvent } from '../domain/events/DomainEvents';
 import { Vector2 } from '../domain/value-objects/Vector2';
@@ -14,6 +15,7 @@ export interface GameSession {
   readonly respawnPoint: Vector2;
   player: PlayerEntity;
   enemies: Map<string, EnemyEntity>;
+  pickups: Map<string, PickupEntity>;
   playerAttackTimerMs: number;
   playerAttackCooldownMs: number;
   playerInvulnerableUntilMs: number;

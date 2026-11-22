@@ -38,7 +38,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     return unsubscribe;
   }, [runtime]);
 
-  const { player, enemies, camera, map } = projection;
+  const { player, enemies, pickups, camera, map } = projection;
   const tileSize = map.tileSize;
 
   const cameraState = useMemo(
@@ -171,6 +171,61 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             color={tile.color}
           />
         ))}
+
+        {/* Render Ground Pickups */}
+        {pickups?.map((pickup) => {
+          const pickupPos = worldToScreenPosition(pickup.position, cameraState);
+          if (
+            pickupPos.x < -20 ||
+            pickupPos.x > width + 20 ||
+            pickupPos.y < -20 ||
+            pickupPos.y > height + 20
+          ) {
+            return null;
+          }
+
+          let pickupColor = '#FAF0CA';
+          if (pickup.itemId.includes('potion')) {
+            pickupColor = '#E63946'; // Red potion
+          } else if (pickup.itemId.includes('sword') || pickup.itemId.includes('rapier')) {
+            pickupColor = '#48CAE4'; // Blue/Steel weapon
+          } else if (pickup.itemId.includes('ring') || pickup.itemId.includes('talisman')) {
+            pickupColor = '#FFD166'; // Gold accessory
+          } else if (
+            pickup.itemId.includes('tunic') ||
+            pickup.itemId.includes('chainmail') ||
+            pickup.itemId.includes('helmet') ||
+            pickup.itemId.includes('cap')
+          ) {
+            pickupColor = '#90BE6D'; // Green/Armor
+          }
+
+          return (
+            <Group key={pickup.id}>
+              {/* Pickup Shadow */}
+              <Circle
+                cx={pickupPos.x}
+                cy={pickupPos.y + 4}
+                r={6}
+                color="rgba(0, 0, 0, 0.4)"
+              />
+              {/* Pickup Glowing Outer Ring */}
+              <Circle
+                cx={pickupPos.x}
+                cy={pickupPos.y}
+                r={7}
+                color="rgba(255, 255, 255, 0.3)"
+              />
+              {/* Pickup Core */}
+              <Circle
+                cx={pickupPos.x}
+                cy={pickupPos.y}
+                r={4.5}
+                color={pickupColor}
+              />
+            </Group>
+          );
+        })}
 
         {/* Render Enemies */}
         {enemies.map((enemy) => {

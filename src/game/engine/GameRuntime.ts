@@ -1,6 +1,8 @@
+import { getItemDefinition } from '../content/definitions/items';
 import { TouchInputAdapter } from '../../input/TouchInputAdapter';
 import {
   EnemyRenderItem,
+  PickupRenderItem,
   RenderProjection,
   UiProjection,
 } from '../application/GameProjection';
@@ -9,14 +11,17 @@ import {
   createEnemyEntity,
   updateEnemy,
 } from '../domain/entities/EnemyEntity';
+import { PickupEntity } from '../domain/entities/PickupEntity';
 import {
   PlayerAnimation,
   PlayerEntity,
   createPlayerEntity,
+  recalculatePlayerStats,
   updatePlayerAnimation,
   updatePlayerTransform,
 } from '../domain/entities/PlayerEntity';
 import { DomainEvent } from '../domain/events/DomainEvents';
+import { EquipmentSlot } from '../domain/items/ItemTypes';
 import {
   DEFAULT_ENEMY_ATTACK,
   DEFAULT_PLAYER_ATTACK,
@@ -25,10 +30,15 @@ import {
   calculateKnockbackPosition,
   isTargetInsideHitbox,
 } from '../domain/rules/CombatRules';
+import { applyConsumableEffect } from '../domain/rules/ConsumableRules';
 import { updateEnemyAI } from '../domain/rules/EnemyAIRules';
+import { equipItem, unequipItem } from '../domain/rules/EquipmentRules';
+import { addItemToInventory, removeItemFromInventory } from '../domain/rules/InventoryRules';
+import { canCollectPickup, rollLoot } from '../domain/rules/LootRules';
 import { applyMovementStep } from '../domain/rules/MovementRules';
-import { createTransform } from '../domain/value-objects/Transform';
-import { createVector2, scaleVector } from '../domain/value-objects/Vector2';
+import { addExperience, getCumulativeXpForLevel } from '../domain/rules/ProgressionRules';
+import { Direction, createTransform } from '../domain/value-objects/Transform';
+import { Vector2, createVector2, scaleVector } from '../domain/value-objects/Vector2';
 import { Camera } from '../world/Camera';
 import { CollisionGrid } from '../world/CollisionGrid';
 import { MapDefinition } from '../world/MapDefinition';
@@ -51,6 +61,7 @@ export class GameRuntime {
   private hasProcessedPlayerAttackHit = false;
   private lastUiPublishMs = 0;
   private cachedProjection: RenderProjection | null = null;
+  private latestNotification: string | null = null;
 
   constructor(
     saveSlotId: string,
@@ -91,12 +102,15 @@ export class GameRuntime {
       createEnemyEntity('goblin_3', 'goblin_scout', createVector2(320, 480), 'up')
     );
 
+    const pickups = new Map<string, PickupEntity>();
+
     this.session = {
       saveSlotId,
       map,
       collisionGrid,
       player,
       enemies,
+      pickups,
       camera,
       respawnPoint: initialSpawn,
       playerAttackTimerMs: 0,
@@ -150,7 +164,7 @@ export class GameRuntime {
     this.session.isPaused = true;
     this.loop.pause();
     this.publishRender();
-    this.publishUi(true); // Immediate UI update on pause
+    this.publishUi(true);
   }
 
   resume(): void {
@@ -158,13 +172,12 @@ export class GameRuntime {
     this.session.isPaused = false;
     this.loop.resume();
     this.publishRender();
-    this.publishUi(true); // Immediate UI update on resume
+    this.publishUi(true);
   }
 
-  stop(canceller?: (id: number) => void): void {
+  stop(): void {
     if (this.isDisposed) return;
-    this.loop.stop(canceller);
-    this.inputAdapter.reset();
+    this.loop.stop();
   }
 
   dispose(): void {
@@ -175,9 +188,6 @@ export class GameRuntime {
     this.isDisposed = true;
   }
 
-  /**
-   * High-frequency render projection subscription for canvas redraws.
-   */
   subscribe(listener: ProjectionListener): () => void {
     this.renderListeners.add(listener);
     listener(this.createProjection());
@@ -186,10 +196,6 @@ export class GameRuntime {
     };
   }
 
-  /**
-   * Controlled cadence UI-only subscription for React HUD components.
-   * Prevents per-frame React setState updates by throttling.
-   */
   subscribeUI(listener: UiListener, intervalMs = UI_THROTTLE_INTERVAL_MS): () => void {
     const entry = { listener, intervalMs };
     this.uiListeners.add(entry);
@@ -236,7 +242,17 @@ export class GameRuntime {
     if (newHealth <= 0) {
       this.session.eventQueue.push({ type: 'PLAYER_DIED' });
     }
-    this.publishUi(true); // Immediate update on damage
+    this.publishUi(true);
+  }
+
+  setPlayerPositionAndFacing(position: Vector2, facing: Direction = 'down'): void {
+    this.session.player = updatePlayerTransform(
+      this.session.player,
+      createTransform(position, facing)
+    );
+    this.session.camera.followTarget(position);
+    this.publishRender();
+    this.publishUi(true);
   }
 
   respawnPlayer(): void {
@@ -261,6 +277,7 @@ export class GameRuntime {
 
     this.session.player = resetPlayer;
     this.session.enemies = resetEnemies;
+    this.session.pickups.clear();
     this.session.playerAttackTimerMs = 0;
     this.session.playerAttackCooldownMs = 0;
     this.session.playerInvulnerableUntilMs = 0;
@@ -274,6 +291,132 @@ export class GameRuntime {
       this.publishRender();
       this.publishUi(true);
     }
+  }
+
+  useItem(slotIndex: number): { success: boolean; reason?: string } {
+    if (this.session.player.currentHealth <= 0 || this.isDisposed) {
+      return { success: false, reason: 'Cannot use items while defeated' };
+    }
+
+    const slot = this.session.player.inventory[slotIndex];
+    if (!slot || !slot.item) {
+      return { success: false, reason: 'Slot is empty' };
+    }
+
+    const result = applyConsumableEffect(
+      slot.item,
+      this.session.player.currentHealth,
+      this.session.player.derivedStats.maxHealth,
+      getItemDefinition
+    );
+
+    if (!result.success) {
+      return { success: false, reason: result.reason };
+    }
+
+    const removeResult = removeItemFromInventory(this.session.player.inventory, slotIndex, 1);
+    this.session.player = {
+      ...this.session.player,
+      currentHealth: result.newHealth,
+      inventory: removeResult.updatedInventory,
+    };
+
+    this.latestNotification = result.effectMessage;
+    this.session.eventQueue.push({
+      type: 'ITEM_USED',
+      itemId: slot.item.itemId,
+      effectMessage: result.effectMessage,
+    });
+
+    this.publishUi(true);
+    return { success: true };
+  }
+
+  equipItem(slotIndex: number): { success: boolean; error?: string } {
+    if (this.session.player.currentHealth <= 0 || this.isDisposed) {
+      return { success: false, error: 'Cannot change equipment while defeated' };
+    }
+
+    const slot = this.session.player.inventory[slotIndex];
+    if (!slot || !slot.item) {
+      return { success: false, error: 'Slot is empty' };
+    }
+
+    const equipResult = equipItem(
+      this.session.player.inventory,
+      this.session.player.equipment,
+      slotIndex,
+      getItemDefinition
+    );
+
+    if (!equipResult.success) {
+      return { success: false, error: equipResult.error };
+    }
+
+    let updatedPlayer: PlayerEntity = {
+      ...this.session.player,
+      inventory: equipResult.updatedInventory,
+      equipment: equipResult.updatedEquipment,
+    };
+    updatedPlayer = recalculatePlayerStats(updatedPlayer, getItemDefinition);
+    this.session.player = updatedPlayer;
+
+    const itemDef = getItemDefinition(slot.item.itemId);
+    this.latestNotification = `Equipped ${itemDef?.name ?? slot.item.itemId}`;
+    if (itemDef?.slot) {
+      this.session.eventQueue.push({
+        type: 'ITEM_EQUIPPED',
+        itemId: slot.item.itemId,
+        slot: itemDef.slot,
+      });
+    }
+
+    this.publishUi(true);
+    return { success: true };
+  }
+
+  unequipItem(slot: EquipmentSlot): { success: boolean; error?: string } {
+    if (this.session.player.currentHealth <= 0 || this.isDisposed) {
+      return { success: false, error: 'Cannot change equipment while defeated' };
+    }
+
+    const equippedItem = this.session.player.equipment[slot];
+    if (!equippedItem) {
+      return { success: false, error: `No item equipped in ${slot}` };
+    }
+
+    const unequipResult = unequipItem(
+      this.session.player.inventory,
+      this.session.player.equipment,
+      slot
+    );
+
+    if (!unequipResult.success) {
+      return { success: false, error: unequipResult.error };
+    }
+
+    let updatedPlayer: PlayerEntity = {
+      ...this.session.player,
+      inventory: unequipResult.updatedInventory,
+      equipment: unequipResult.updatedEquipment,
+    };
+    updatedPlayer = recalculatePlayerStats(updatedPlayer, getItemDefinition);
+    this.session.player = updatedPlayer;
+
+    const itemDef = getItemDefinition(equippedItem.itemId);
+    this.latestNotification = `Unequipped ${itemDef?.name ?? equippedItem.itemId}`;
+    this.session.eventQueue.push({
+      type: 'ITEM_UNEQUIPPED',
+      itemId: equippedItem.itemId,
+      slot,
+    });
+
+    this.publishUi(true);
+    return { success: true };
+  }
+
+  clearNotification(): void {
+    this.latestNotification = null;
   }
 
   createProjection(): RenderProjection {
@@ -290,6 +433,16 @@ export class GameRuntime {
       });
     }
 
+    const pickupList: PickupRenderItem[] = [];
+    for (const pickup of this.session.pickups.values()) {
+      pickupList.push({
+        id: pickup.id,
+        itemId: pickup.itemId,
+        position: pickup.position,
+        quantity: pickup.quantity,
+      });
+    }
+
     const nowMs = this.session.elapsedTimeSeconds * 1000;
 
     return Object.freeze({
@@ -297,13 +450,15 @@ export class GameRuntime {
         position: this.session.player.transform.position,
         facing: this.session.player.transform.facing,
         currentHealth: this.session.player.currentHealth,
-        maxHealth: this.session.player.stats.maxHealth,
+        maxHealth: this.session.player.derivedStats.maxHealth,
         animation: this.session.player.animation,
         isAttacking: this.session.playerAttackTimerMs > 0,
         isInvulnerable: nowMs < this.session.playerInvulnerableUntilMs,
         isDead: this.session.player.currentHealth <= 0,
+        level: this.session.player.level,
       },
       enemies: Object.freeze(enemyList),
+      pickups: Object.freeze(pickupList),
       camera: {
         position: this.session.camera.position,
         viewportWidth: this.session.camera.viewportWidth,
@@ -325,17 +480,29 @@ export class GameRuntime {
       if (enemy.state !== 'dead') aliveCount++;
     }
 
+    const nextLevelBaseXp = getCumulativeXpForLevel(this.session.player.level + 1);
+    const currentLevelBaseXp = getCumulativeXpForLevel(this.session.player.level);
+    const xpRequired = nextLevelBaseXp - currentLevelBaseXp;
+    const currentXp = this.session.player.experience - currentLevelBaseXp;
+
     return Object.freeze({
       playerHealth: this.session.player.currentHealth,
-      playerMaxHealth: this.session.player.stats.maxHealth,
+      playerMaxHealth: this.session.player.derivedStats.maxHealth,
       playerCoords: this.session.player.transform.position,
       playerFacing: this.session.player.transform.facing,
+      playerLevel: this.session.player.level,
+      playerExperience: currentXp,
+      playerXpToNextLevel: xpRequired,
+      derivedStats: this.session.player.derivedStats,
+      inventory: this.session.player.inventory,
+      equipment: this.session.player.equipment,
       isDead: this.session.player.currentHealth <= 0,
       isPaused: this.session.isPaused,
       mapName: this.session.map.name,
       aliveEnemyCount: aliveCount,
       totalSteps: this.loop.steps,
       elapsedTimeSeconds: this.session.elapsedTimeSeconds,
+      notificationMessage: this.latestNotification,
     });
   }
 
@@ -379,7 +546,7 @@ export class GameRuntime {
       const intendedTransform = applyMovementStep({
         currentTransform: this.session.player.transform,
         inputVector: inputSnapshot.moveVector,
-        speedUnitsPerSecond: this.session.player.stats.moveSpeed,
+        speedUnitsPerSecond: this.session.player.derivedStats.moveSpeed,
         deltaSeconds,
       });
 
@@ -424,24 +591,51 @@ export class GameRuntime {
 
     this.session.camera.followTarget(this.session.player.transform.position);
 
+    // 2b. Pickup collection
+    for (const [pickupId, pickup] of this.session.pickups.entries()) {
+      if (canCollectPickup(this.session.player.transform.position, pickup)) {
+        const addResult = addItemToInventory(
+          this.session.player.inventory,
+          { itemId: pickup.itemId, quantity: pickup.quantity },
+          getItemDefinition
+        );
+        if (addResult.success && addResult.remainingQuantity === 0) {
+          this.session.player = {
+            ...this.session.player,
+            inventory: addResult.updatedInventory,
+          };
+          this.session.pickups.delete(pickupId);
+          const itemDef = getItemDefinition(pickup.itemId);
+          this.latestNotification = `Collected ${itemDef?.name ?? pickup.itemId}`;
+          this.session.eventQueue.push({
+            type: 'ITEM_COLLECTED',
+            pickupId,
+            itemId: pickup.itemId,
+            quantity: pickup.quantity,
+          });
+          this.publishUi(true);
+        }
+      }
+    }
+
     // 3. Process Player Attack Timer & Hit Window
     if (this.session.playerAttackTimerMs > 0) {
       this.session.playerAttackTimerMs -= deltaMs;
 
-      const totalDuration =
+      const timeElapsedInAttack =
         DEFAULT_PLAYER_ATTACK.startupMs +
         DEFAULT_PLAYER_ATTACK.activeMs +
-        DEFAULT_PLAYER_ATTACK.recoveryMs;
-      const elapsedAttackMs = totalDuration - this.session.playerAttackTimerMs;
+        DEFAULT_PLAYER_ATTACK.recoveryMs -
+        this.session.playerAttackTimerMs;
 
-      // Active hit window check
-      if (
-        !this.hasProcessedPlayerAttackHit &&
-        elapsedAttackMs >= DEFAULT_PLAYER_ATTACK.startupMs &&
-        elapsedAttackMs <= DEFAULT_PLAYER_ATTACK.startupMs + DEFAULT_PLAYER_ATTACK.activeMs
-      ) {
-        this.hasProcessedPlayerAttackHit = true;
+      const isInActiveWindow =
+        timeElapsedInAttack >= DEFAULT_PLAYER_ATTACK.startupMs &&
+        timeElapsedInAttack <=
+          DEFAULT_PLAYER_ATTACK.startupMs + DEFAULT_PLAYER_ATTACK.activeMs;
+
+      if (isInActiveWindow && !this.hasProcessedPlayerAttackHit) {
         this.executePlayerAttackHit(nowMs);
+        this.hasProcessedPlayerAttackHit = true;
       }
 
       if (this.session.playerAttackTimerMs <= 0) {
@@ -455,15 +649,14 @@ export class GameRuntime {
       }
     }
 
-    // 4. Update Enemies AI, Movement, and Attacks
+    // 4. Update Enemy AI and Combat
+    const playerPosition = this.session.player.transform.position;
     for (const [id, enemy] of this.session.enemies.entries()) {
-      if (enemy.state === 'dead') continue;
-
-      const aiResult = updateEnemyAI(enemy, this.session.player.transform.position, deltaSeconds);
+      const aiResult = updateEnemyAI(enemy, playerPosition, deltaSeconds);
       let updatedEnemy = aiResult.updatedEnemy;
 
-      // Resolve enemy movement with collision grid
-      if (aiResult.intendedMovement.x !== 0 || aiResult.intendedMovement.y !== 0) {
+      // Enemy movement with wall-sliding
+      if (aiResult.intendedMovement) {
         const displacement = scaleVector(aiResult.intendedMovement, deltaSeconds);
         const resolvedPos = this.session.collisionGrid.resolveMovement(
           updatedEnemy.transform.position,
@@ -510,7 +703,7 @@ export class GameRuntime {
         if (nowMs < enemy.invulnerableUntilMs) continue;
 
         const damage = calculateDamage(
-          this.session.player.stats.attack,
+          this.session.player.derivedStats.attack,
           enemy.stats.defense,
           DEFAULT_PLAYER_ATTACK.damageMultiplier
         );
@@ -529,7 +722,7 @@ export class GameRuntime {
           createVector2(knockbackPos.x - enemy.transform.position.x, knockbackPos.y - enemy.transform.position.y)
         );
 
-        const updated = updateEnemy(enemy, {
+        let updated = updateEnemy(enemy, {
           currentHealth: newHealth,
           state: isDead ? 'dead' : 'hurt',
           stateTimerMs: 0,
@@ -552,6 +745,55 @@ export class GameRuntime {
             enemyType: enemy.enemyType,
             xpReward: enemy.stats.xpReward,
           });
+
+          // Award XP and spawn loot ONLY ONCE per enemy
+          if (!enemy.xpAwarded) {
+            updated = updateEnemy(updated, { xpAwarded: true });
+            this.session.enemies.set(id, updated);
+
+            // Award XP
+            const xpResult = addExperience(
+              this.session.player.level,
+              this.session.player.experience,
+              enemy.stats.xpReward
+            );
+
+            let updatedPlayer: PlayerEntity = {
+              ...this.session.player,
+              level: xpResult.newLevel,
+              experience: xpResult.totalXp,
+            };
+            updatedPlayer = recalculatePlayerStats(updatedPlayer, getItemDefinition);
+
+            if (xpResult.didLevelUp) {
+              updatedPlayer = {
+                ...updatedPlayer,
+                currentHealth: updatedPlayer.derivedStats.maxHealth,
+              };
+              this.session.eventQueue.push({
+                type: 'LEVEL_UP',
+                oldLevel: xpResult.oldLevel,
+                newLevel: xpResult.newLevel,
+                statBonus: xpResult.statBonus,
+              });
+              this.latestNotification = `Level Up! Reached Level ${xpResult.newLevel}`;
+            }
+
+            this.session.player = updatedPlayer;
+
+            // Spawn loot pickups
+            const drops = rollLoot(enemy.enemyType, enemy.transform.position);
+            for (const drop of drops) {
+              this.session.pickups.set(drop.id, drop);
+              this.session.eventQueue.push({
+                type: 'ITEM_DROPPED',
+                pickupId: drop.id,
+                itemId: drop.itemId,
+                quantity: drop.quantity,
+                position: drop.position,
+              });
+            }
+          }
         }
 
         this.publishUi(true); // Immediate UI update on enemy damage/defeat
@@ -573,14 +815,14 @@ export class GameRuntime {
     if (isTargetInsideHitbox(this.session.player.transform.position, 12, hitbox)) {
       const damage = calculateDamage(
         enemy.stats.attackPower,
-        this.session.player.stats.defense,
+        this.session.player.derivedStats.defense,
         DEFAULT_ENEMY_ATTACK.damageMultiplier
       );
 
       const newHealth = Math.max(0, this.session.player.currentHealth - damage);
-      const isDead = newHealth <= 0;
+      this.session.playerInvulnerableUntilMs = nowMs + 500;
 
-      // Knockback on player
+      // Apply knockback to player
       const knockbackPos = calculateKnockbackPosition(
         enemy.transform.position,
         this.session.player.transform.position,
@@ -588,20 +830,20 @@ export class GameRuntime {
       );
       const resolvedKnockback = this.session.collisionGrid.resolveMovement(
         this.session.player.transform.position,
-        createVector2(
-          knockbackPos.x - this.session.player.transform.position.x,
-          knockbackPos.y - this.session.player.transform.position.y
-        )
+        createVector2(knockbackPos.x - this.session.player.transform.position.x, knockbackPos.y - this.session.player.transform.position.y)
       );
 
+      const isDead = newHealth <= 0;
       this.session.player = {
         ...this.session.player,
         currentHealth: newHealth,
+        animation: {
+          state: isDead ? 'dead' : 'hurt',
+          frame: 0,
+          timerMs: 0,
+        },
         transform: createTransform(resolvedKnockback, this.session.player.transform.facing),
-        animation: isDead ? { state: 'dead', frame: 0, timerMs: 0 } : { state: 'hurt', frame: 0, timerMs: 0 },
       };
-
-      this.session.playerInvulnerableUntilMs = nowMs + 400; // 400ms i-frame
 
       this.session.eventQueue.push({
         type: 'PLAYER_DAMAGED',
@@ -613,30 +855,28 @@ export class GameRuntime {
         this.session.eventQueue.push({ type: 'PLAYER_DIED' });
       }
 
-      this.publishUi(true); // Immediate UI update on player damage/death
+      this.publishUi(true); // Immediate UI update on player damage
     }
   }
 
   private publishRender(): void {
-    if (this.renderListeners.size === 0 || this.isDisposed) return;
+    if (this.renderListeners.size === 0) return;
     const proj = this.createProjection();
     for (const listener of this.renderListeners) {
       listener(proj);
     }
   }
 
-  private publishUi(force = false): void {
-    if (this.uiListeners.size === 0 || this.isDisposed) return;
+  private publishUi(immediate = false): void {
+    if (this.uiListeners.size === 0) return;
     const nowMs = this.session.elapsedTimeSeconds * 1000;
-
-    if (!force && nowMs - this.lastUiPublishMs < UI_THROTTLE_INTERVAL_MS) {
-      return;
-    }
-
-    this.lastUiPublishMs = nowMs;
     const ui = this.createUiProjection();
-    for (const { listener } of this.uiListeners) {
-      listener(ui);
+
+    for (const entry of this.uiListeners) {
+      if (immediate || nowMs - this.lastUiPublishMs >= entry.intervalMs) {
+        entry.listener(ui);
+      }
     }
+    this.lastUiPublishMs = nowMs;
   }
 }
