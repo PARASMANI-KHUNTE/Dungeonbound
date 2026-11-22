@@ -1,6 +1,6 @@
 # Dungeonbound: The Lost Realm
 
-> **Status:** Phase 0 (Project Foundation & Technical Spike) complete.
+> **Status:** Phase 1 (Game Shell & Rendering Foundation) complete.
 
 Dungeonbound is an **offline-first, single-player 2D top-down action RPG** for mobile. The player explores an interconnected fantasy realm, accepts quests in a safe village hub, descends into dungeons, fights enemies, collects loot, and returns stronger.
 
@@ -21,14 +21,14 @@ The game is built with **React Native + Expo SDK 58 + TypeScript + React Native 
 
 ### Layer Boundaries
 
-- `app/`: Expo Router routes and application screens.
+- `app/`: Expo Router routes and application screens (`index.tsx` Main Menu, `game/[saveSlotId].tsx` Gameplay).
 - `src/ui/`: UI components, menus, touch controls, HUD.
 - `src/game/domain/`: Pure domain types, value objects, rules (0 imports from React, Skia, Expo, SQLite).
-- `src/game/engine/`: Game loop, session lifecycle, update scheduler.
-- `src/game/systems/`: Movement, collision, AI, combat, loot, quests.
-- `src/game/world/`: Maps, tile parser, collision grid, camera.
-- `src/rendering/`: Skia canvas and scene renderers (read-only view).
-- `src/input/`: Touch adapter and virtual controls.
+- `src/game/engine/`: Game loop (`GameLoop.ts`), session lifecycle (`GameRuntime.ts`), update scheduler.
+- `src/game/world/`: Maps (`MapDefinition.ts`), tile parser (`TileMapParser.ts`), camera follow (`Camera.ts`).
+- `src/game/application/`: Read-only projections (`GameProjection.ts`).
+- `src/rendering/`: Skia canvas (`GameCanvas.tsx`) and camera coordinate renderer (`CameraRenderer.ts`).
+- `src/input/`: Touch adapter (`TouchInputAdapter.ts`) and virtual controls.
 - `src/platform/persistence/`: SQLite database, migrations, repositories.
 - `tests/`: Domain unit tests and integration tests.
 
@@ -58,14 +58,23 @@ npm install
 
 ---
 
-## Phase 0 Technical Spike Deliverables
+## Implemented Phases
 
+### Phase 0 — Foundation & Technical Spike
 - [x] Scaffolding with Expo SDK 58, React Native 0.88, React 19.3, TypeScript in strict mode.
 - [x] Landscape orientation locked in `app.json`.
-- [x] Expo Router layout and entry point.
-- [x] `@shopify/react-native-skia` 2D canvas rendering dungeon tile grid and placeholder player character.
+- [x] `@shopify/react-native-skia` 2D canvas spike.
 - [x] `expo-sqlite` database initialization with WAL mode, schema migrations table, and persistence probe.
-- [x] Pure domain modules (`Vector2` and `MovementRules`) with 14 passing unit tests.
-- [x] Path aliases configured (`@/*` -> `./src/*`).
-- [x] Metro bundler Android export verified without errors.
-- [x] 100% offline verification: no network calls required.
+- [x] Pure domain modules (`Vector2` and `MovementRules`).
+
+### Phase 1 — Game Shell & Rendering Foundation
+- [x] Main menu (`app/index.tsx`) and gameplay route (`app/game/[saveSlotId].tsx`).
+- [x] `GameRuntime` lifecycle (`create`, `start`, `pause`, `resume`, `stop`, `dispose`).
+- [x] Fixed-step 60 FPS simulation loop with frame delta accumulator and catch-up capping (`GameLoop.ts`).
+- [x] Bundled authored map `village_outskirts.json` (30×20 tiles, ground & decoration layers) parsed via `TileMapParser.ts`.
+- [x] Camera follow model (`Camera.ts`) clamped to world boundaries with viewport culling (`CameraRenderer.ts`).
+- [x] Read-only Skia game canvas (`GameCanvas.tsx`) projecting map and placeholder hero sprite with directional indicator.
+- [x] Top HUD (Health bar, map title, coordinates) and touch directional controls.
+- [x] Pause modal that suspends simulation ticks with play stats.
+- [x] App background/foreground lifecycle handling via `AppState`.
+- [x] 27 unit tests passing across all domain and engine modules.
