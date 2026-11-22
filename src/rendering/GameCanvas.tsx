@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Canvas, Circle, Group, Rect } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, Rect } from '@shopify/react-native-skia';
 import { RenderProjection } from '@/game/application/GameProjection';
 import { calculateVisibleTileBounds, worldToScreenPosition } from './CameraRenderer';
 
@@ -26,7 +26,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   width,
   height,
 }) => {
-  const { player, camera, map } = projection;
+  const { player, enemies, camera, map } = projection;
   const tileSize = map.tileSize;
 
   const cameraState = useMemo(
@@ -54,9 +54,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     return worldToScreenPosition(player.position, cameraState);
   }, [player.position, cameraState]);
 
-  // Facing indicator offset
-  const facingOffset = useMemo(() => {
-    const radius = 10;
+  // Player Facing indicator offset
+  const playerFacingOffset = useMemo(() => {
+    const radius = 11;
     switch (player.facing) {
       case 'up':
         return { x: 0, y: -radius };
@@ -68,6 +68,34 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         return { x: radius, y: 0 };
     }
   }, [player.facing]);
+
+  // Player attack slash offset
+  const attackSlashCoords = useMemo(() => {
+    if (!player.isAttacking) return null;
+    const distance = 26;
+    switch (player.facing) {
+      case 'up':
+        return {
+          p1: { x: playerScreenPos.x - 18, y: playerScreenPos.y - distance },
+          p2: { x: playerScreenPos.x + 18, y: playerScreenPos.y - distance },
+        };
+      case 'down':
+        return {
+          p1: { x: playerScreenPos.x - 18, y: playerScreenPos.y + distance },
+          p2: { x: playerScreenPos.x + 18, y: playerScreenPos.y + distance },
+        };
+      case 'left':
+        return {
+          p1: { x: playerScreenPos.x - distance, y: playerScreenPos.y - 18 },
+          p2: { x: playerScreenPos.x - distance, y: playerScreenPos.y + 18 },
+        };
+      case 'right':
+        return {
+          p1: { x: playerScreenPos.x + distance, y: playerScreenPos.y - 18 },
+          p2: { x: playerScreenPos.x + distance, y: playerScreenPos.y + 18 },
+        };
+    }
+  }, [player.isAttacking, player.facing, playerScreenPos]);
 
   // Generate visible tiles to render
   const visibleTiles = useMemo(() => {
@@ -123,37 +151,122 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           />
         ))}
 
-        {/* Render player character */}
-        <Group>
-          {/* Shadow */}
-          <Circle
-            cx={playerScreenPos.x}
-            cy={playerScreenPos.y + 11}
-            r={13}
-            color="rgba(0, 0, 0, 0.45)"
-          />
-          {/* Hero body */}
-          <Circle
-            cx={playerScreenPos.x}
-            cy={playerScreenPos.y}
-            r={13}
-            color="#E5A93C"
-          />
-          {/* Hero emblem */}
-          <Circle
-            cx={playerScreenPos.x}
-            cy={playerScreenPos.y}
-            r={7}
-            color="#FAF0CA"
-          />
-          {/* Facing indicator */}
-          <Circle
-            cx={playerScreenPos.x + facingOffset.x}
-            cy={playerScreenPos.y + facingOffset.y}
-            r={3.5}
-            color="#9E2A2B"
-          />
-        </Group>
+        {/* Render Enemies */}
+        {enemies.map((enemy) => {
+          const enemyPos = worldToScreenPosition(enemy.position, cameraState);
+          // Viewport culling for enemies
+          if (
+            enemyPos.x < -32 ||
+            enemyPos.x > width + 32 ||
+            enemyPos.y < -32 ||
+            enemyPos.y > height + 32
+          ) {
+            return null;
+          }
+
+          if (enemy.state === 'dead') {
+            return (
+              <Group key={enemy.id}>
+                <Circle cx={enemyPos.x} cy={enemyPos.y} r={10} color="#33272A" />
+                <Circle cx={enemyPos.x} cy={enemyPos.y} r={5} color="#1E1618" />
+              </Group>
+            );
+          }
+
+          const isHurt = enemy.state === 'hurt';
+          const isAttacking = enemy.state === 'attack';
+          const bodyColor = isHurt ? '#E63946' : isAttacking ? '#D90429' : '#2D6A4F';
+
+          const hpRatio = Math.max(0, Math.min(1, enemy.currentHealth / enemy.maxHealth));
+
+          return (
+            <Group key={enemy.id}>
+              {/* Shadow */}
+              <Circle
+                cx={enemyPos.x}
+                cy={enemyPos.y + 9}
+                r={11}
+                color="rgba(0, 0, 0, 0.4)"
+              />
+              {/* Enemy Body */}
+              <Circle cx={enemyPos.x} cy={enemyPos.y} r={11} color={bodyColor} />
+              {/* Goblin Eye / Crest */}
+              <Circle cx={enemyPos.x} cy={enemyPos.y} r={5} color="#D8F3DC" />
+
+              {/* Enemy Health Bar */}
+              <Rect
+                x={enemyPos.x - 12}
+                y={enemyPos.y - 18}
+                width={24}
+                height={3}
+                color="#1A1829"
+              />
+              <Rect
+                x={enemyPos.x - 12}
+                y={enemyPos.y - 18}
+                width={24 * hpRatio}
+                height={3}
+                color={hpRatio > 0.4 ? '#52B788' : '#E63946'}
+              />
+            </Group>
+          );
+        })}
+
+        {/* Render Player Character */}
+        {player.isDead ? (
+          <Group>
+            {/* Player Tombstone / Defeated Marker */}
+            <Rect
+              x={playerScreenPos.x - 8}
+              y={playerScreenPos.y - 12}
+              width={16}
+              height={22}
+              color="#555B6E"
+            />
+            <Circle cx={playerScreenPos.x} cy={playerScreenPos.y - 12} r={8} color="#555B6E" />
+          </Group>
+        ) : (
+          <Group>
+            {/* Player Shadow */}
+            <Circle
+              cx={playerScreenPos.x}
+              cy={playerScreenPos.y + 11}
+              r={13}
+              color="rgba(0, 0, 0, 0.45)"
+            />
+            {/* Hero Body (flashes red when invulnerable/hit) */}
+            <Circle
+              cx={playerScreenPos.x}
+              cy={playerScreenPos.y}
+              r={13}
+              color={player.isInvulnerable ? '#E63946' : '#E5A93C'}
+            />
+            {/* Hero Crest */}
+            <Circle
+              cx={playerScreenPos.x}
+              cy={playerScreenPos.y}
+              r={7}
+              color="#FAF0CA"
+            />
+            {/* Facing Indicator */}
+            <Circle
+              cx={playerScreenPos.x + playerFacingOffset.x}
+              cy={playerScreenPos.y + playerFacingOffset.y}
+              r={3.5}
+              color="#9E2A2B"
+            />
+
+            {/* Attack Slash Effect */}
+            {attackSlashCoords && (
+              <Line
+                p1={attackSlashCoords.p1}
+                p2={attackSlashCoords.p2}
+                color="#FAF0CA"
+                strokeWidth={4}
+              />
+            )}
+          </Group>
+        )}
       </Canvas>
     </View>
   );
