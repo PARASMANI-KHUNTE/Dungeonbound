@@ -13,7 +13,9 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { GameCanvas } from '@/rendering/GameCanvas';
 import { GameRuntime } from '@/game/engine/GameRuntime';
-import { RenderProjection } from '@/game/application/GameProjection';
+import { UiProjection } from '@/game/application/GameProjection';
+import { VirtualJoystick } from '@/input/VirtualJoystick';
+import { Vector2 } from '@/game/domain/value-objects/Vector2';
 import { VILLAGE_OUTSKIRTS_MAP } from '@/game/content/definitions/maps';
 
 export default function GameplayScreen() {
@@ -22,8 +24,11 @@ export default function GameplayScreen() {
   const { width, height } = useWindowDimensions();
 
   const runtimeRef = useRef<GameRuntime | null>(null);
-  const [projection, setProjection] = useState<RenderProjection | null>(null);
-  const [isPaused, setIsPaused] = useState(false);
+  const [runtimeReady, setRuntimeReady] = useState(false);
+  const [controlMode, setControlMode] = useState<'JOYSTICK' | 'DPAD'>('JOYSTICK');
+
+  // Throttled UI State (10 Hz cadence or on discrete events - NO 60 FPS React re-renders!)
+  const [uiState, setUiState] = useState<UiProjection | null>(null);
 
   // Initialize runtime
   useEffect(() => {
@@ -35,17 +40,18 @@ export default function GameplayScreen() {
     );
     runtimeRef.current = runtime;
 
-    const unsubscribe = runtime.subscribe((newProj) => {
-      setProjection(newProj);
-    });
+    // Subscribe ONLY to throttled UI projection (100ms throttle)
+    const unsubscribeUi = runtime.subscribeUI((newUi) => {
+      setUiState(newUi);
+    }, 100);
 
     runtime.start();
+    setRuntimeReady(true);
 
     // App state listener for background pause
     const handleAppStateChange = (nextState: AppStateStatus) => {
       if (nextState.match(/inactive|background/)) {
         runtime.pause();
-        setIsPaused(true);
       }
     };
 
@@ -53,25 +59,30 @@ export default function GameplayScreen() {
 
     return () => {
       sub.remove();
-      unsubscribe();
+      unsubscribeUi();
       runtime.dispose();
       runtimeRef.current = null;
     };
   }, [saveSlotId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Resize camera viewport on orientation / dimension change
+  // Resize camera viewport on dimension change
   useEffect(() => {
     if (runtimeRef.current) {
       runtimeRef.current.setViewportDimensions(width, height);
     }
   }, [width, height]);
 
-  // Touch controls movement handlers
-  const handleMoveStart = useCallback((dx: number, dy: number) => {
+  // Analog Joystick movement handler
+  const handleJoystickMove = useCallback((vec: Vector2) => {
+    runtimeRef.current?.input.setMovement(vec.x, vec.y);
+  }, []);
+
+  // D-Pad movement handlers
+  const handleDpadMoveStart = useCallback((dx: number, dy: number) => {
     runtimeRef.current?.input.setMovement(dx, dy);
   }, []);
 
-  const handleMoveEnd = useCallback(() => {
+  const handleDpadMoveEnd = useCallback(() => {
     runtimeRef.current?.input.setMovement(0, 0);
   }, []);
 
@@ -92,11 +103,13 @@ export default function GameplayScreen() {
 
     if (runtime.isPaused) {
       runtime.resume();
-      setIsPaused(false);
     } else {
       runtime.pause();
-      setIsPaused(true);
     }
+  }, []);
+
+  const handleToggleControlMode = useCallback(() => {
+    setControlMode((prev) => (prev === 'JOYSTICK' ? 'DPAD' : 'JOYSTICK'));
   }, []);
 
   const handleReturnToMenu = useCallback(() => {
@@ -104,7 +117,7 @@ export default function GameplayScreen() {
     router.replace('/');
   }, [router]);
 
-  if (!projection) {
+  if (!runtimeReady || !runtimeRef.current || !uiState) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <Text style={styles.loadingText}>Entering the Lost Realm...</Text>
@@ -112,21 +125,30 @@ export default function GameplayScreen() {
     );
   }
 
-  const { player, enemies, camera, map, stats } = projection;
-  const aliveEnemies = enemies.filter((e) => e.state !== 'dead').length;
+  const {
+    playerHealth,
+    playerMaxHealth,
+    playerCoords,
+    mapName,
+    isDead,
+    isPaused,
+    aliveEnemyCount,
+    totalSteps,
+    elapsedTimeSeconds,
+  } = uiState;
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Full-screen Skia Game Canvas */}
-        <GameCanvas projection={projection} width={width} height={height} />
+        {/* Full-screen Skia Game Canvas (driven directly by runtime without parent re-renders) */}
+        <GameCanvas runtime={runtimeRef.current} width={width} height={height} />
 
         {/* Top HUD */}
         <View style={styles.topHud}>
           <View style={styles.hudCard}>
-            <Text style={styles.hudMapName}>{map.name}</Text>
+            <Text style={styles.hudMapName}>{mapName}</Text>
             <Text style={styles.hudCoords}>
-              X: {Math.round(player.position.x)}  Y: {Math.round(player.position.y)}
+              X: {Math.round(playerCoords.x)}  Y: {Math.round(playerCoords.y)}
             </Text>
           </View>
 
@@ -138,72 +160,83 @@ export default function GameplayScreen() {
                   {
                     width: `${Math.max(
                       0,
-                      Math.min(100, (player.currentHealth / player.maxHealth) * 100)
+                      Math.min(100, (playerHealth / playerMaxHealth) * 100)
                     )}%`,
                   },
                 ]}
               />
             </View>
             <Text style={styles.hpText}>
-              HP: {player.currentHealth}/{player.maxHealth} • Goblins: {aliveEnemies}
+              HP: {playerHealth}/{playerMaxHealth} • Goblins: {aliveEnemyCount}
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.pauseBtn} onPress={handleTogglePause}>
-            <Text style={styles.pauseBtnText}>PAUSE</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Touch Controls Overlay: Left D-Pad, Right Attack Button */}
-        <View style={styles.controlsOverlay} pointerEvents="box-none">
-          {/* Left D-Pad */}
-          <View style={styles.dpadContainer}>
-            <TouchableOpacity
-              style={styles.dpadBtn}
-              onPressIn={() => handleMoveStart(0, -1)}
-              onPressOut={handleMoveEnd}
-              accessibilityLabel="Move North"
-            >
-              <Text style={styles.dpadIcon}>▲</Text>
+          <View style={styles.topButtons}>
+            <TouchableOpacity style={styles.controlModeBtn} onPress={handleToggleControlMode}>
+              <Text style={styles.controlModeBtnText}>
+                {controlMode === 'JOYSTICK' ? '🕹️ STICK' : '🎛️ D-PAD'}
+              </Text>
             </TouchableOpacity>
 
-            <View style={styles.dpadMiddleRow}>
-              <TouchableOpacity
-                style={styles.dpadBtn}
-                onPressIn={() => handleMoveStart(-1, 0)}
-                onPressOut={handleMoveEnd}
-                accessibilityLabel="Move West"
-              >
-                <Text style={styles.dpadIcon}>◀</Text>
-              </TouchableOpacity>
-              <View style={styles.dpadSpacer} />
-              <TouchableOpacity
-                style={styles.dpadBtn}
-                onPressIn={() => handleMoveStart(1, 0)}
-                onPressOut={handleMoveEnd}
-                accessibilityLabel="Move East"
-              >
-                <Text style={styles.dpadIcon}>▶</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={styles.dpadBtn}
-              onPressIn={() => handleMoveStart(0, 1)}
-              onPressOut={handleMoveEnd}
-              accessibilityLabel="Move South"
-            >
-              <Text style={styles.dpadIcon}>▼</Text>
+            <TouchableOpacity style={styles.pauseBtn} onPress={handleTogglePause}>
+              <Text style={styles.pauseBtnText}>PAUSE</Text>
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Touch Controls Overlay: Left Movement, Right Action */}
+        <View style={styles.controlsOverlay} pointerEvents="box-none">
+          {/* Movement Control: Virtual Joystick OR Directional D-Pad */}
+          {controlMode === 'JOYSTICK' ? (
+            <View style={styles.joystickContainer}>
+              <VirtualJoystick onMove={handleJoystickMove} radius={52} knobRadius={22} deadzone={6} />
+            </View>
+          ) : (
+            <View style={styles.dpadContainer}>
+              <TouchableOpacity
+                style={styles.dpadBtn}
+                onPressIn={() => handleDpadMoveStart(0, -1)}
+                onPressOut={handleDpadMoveEnd}
+                accessibilityLabel="Move North"
+              >
+                <Text style={styles.dpadIcon}>▲</Text>
+              </TouchableOpacity>
+
+              <View style={styles.dpadMiddleRow}>
+                <TouchableOpacity
+                  style={styles.dpadBtn}
+                  onPressIn={() => handleDpadMoveStart(-1, 0)}
+                  onPressOut={handleDpadMoveEnd}
+                  accessibilityLabel="Move West"
+                >
+                  <Text style={styles.dpadIcon}>◀</Text>
+                </TouchableOpacity>
+                <View style={styles.dpadSpacer} />
+                <TouchableOpacity
+                  style={styles.dpadBtn}
+                  onPressIn={() => handleDpadMoveStart(1, 0)}
+                  onPressOut={handleDpadMoveEnd}
+                  accessibilityLabel="Move East"
+                >
+                  <Text style={styles.dpadIcon}>▶</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                style={styles.dpadBtn}
+                onPressIn={() => handleDpadMoveStart(0, 1)}
+                onPressOut={handleDpadMoveEnd}
+                accessibilityLabel="Move South"
+              >
+                <Text style={styles.dpadIcon}>▼</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Right Action Button: Attack */}
           <View style={styles.actionContainer}>
             <TouchableOpacity
-              style={[
-                styles.attackBtn,
-                player.isAttacking && styles.attackBtnActive,
-              ]}
+              style={styles.attackBtn}
               onPress={handleAttack}
               activeOpacity={0.7}
               accessibilityLabel="Attack with Sword"
@@ -214,7 +247,7 @@ export default function GameplayScreen() {
         </View>
 
         {/* Pause Modal */}
-        <Modal visible={isPaused && !player.isDead} transparent animationType="fade">
+        <Modal visible={isPaused && !isDead} transparent animationType="fade">
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>GAME PAUSED</Text>
@@ -222,16 +255,13 @@ export default function GameplayScreen() {
 
               <View style={styles.modalStats}>
                 <Text style={styles.statLine}>
-                  Steps simulated: <Text style={styles.statVal}>{stats.stepCount}</Text>
+                  Steps simulated: <Text style={styles.statVal}>{totalSteps}</Text>
                 </Text>
                 <Text style={styles.statLine}>
-                  Play time: <Text style={styles.statVal}>{stats.elapsedTimeSeconds.toFixed(1)}s</Text>
+                  Play time: <Text style={styles.statVal}>{elapsedTimeSeconds.toFixed(1)}s</Text>
                 </Text>
                 <Text style={styles.statLine}>
-                  Camera focus: <Text style={styles.statVal}>({Math.round(camera.position.x)}, {Math.round(camera.position.y)})</Text>
-                </Text>
-                <Text style={styles.statLine}>
-                  Enemies remaining: <Text style={styles.statVal}>{aliveEnemies}</Text>
+                  Enemies remaining: <Text style={styles.statVal}>{aliveEnemyCount}</Text>
                 </Text>
               </View>
 
@@ -247,13 +277,19 @@ export default function GameplayScreen() {
         </Modal>
 
         {/* Game Over / Death Modal */}
-        <Modal visible={player.isDead} transparent animationType="fade">
+        <Modal visible={isDead} transparent animationType="fade">
           <View style={styles.modalOverlay}>
             <View style={[styles.modalCard, { borderColor: '#E63946' }]}>
               <Text style={[styles.modalTitle, { color: '#E63946' }]}>YOU DIED</Text>
               <Text style={styles.modalSubtitle}>Defeated by corrupted creatures</Text>
 
-              <TouchableOpacity style={[styles.modalResumeBtn, { backgroundColor: '#8B0000', borderColor: '#E63946' }]} onPress={handleRespawn}>
+              <TouchableOpacity
+                style={[
+                  styles.modalResumeBtn,
+                  { backgroundColor: '#8B0000', borderColor: '#E63946' },
+                ]}
+                onPress={handleRespawn}
+              >
                 <Text style={styles.modalBtnText}>RESPAWN AT VILLAGE</Text>
               </TouchableOpacity>
 
@@ -337,6 +373,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 2,
   },
+  topButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  controlModeBtn: {
+    backgroundColor: '#27223D',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#4E4376',
+    marginRight: 8,
+  },
+  controlModeBtnText: {
+    color: '#E5A93C',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
   pauseBtn: {
     backgroundColor: '#2E274C',
     paddingHorizontal: 14,
@@ -358,6 +412,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
+  },
+  joystickContainer: {
+    padding: 6,
   },
   dpadContainer: {
     alignItems: 'center',
@@ -404,10 +461,6 @@ const styles = StyleSheet.create({
     borderWidth: 2.5,
     borderColor: '#E63946',
     elevation: 4,
-  },
-  attackBtnActive: {
-    backgroundColor: '#D90429',
-    borderColor: '#FFF',
   },
   attackBtnText: {
     color: '#FAF0CA',

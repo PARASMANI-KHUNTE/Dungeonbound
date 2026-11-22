@@ -1,4 +1,5 @@
 import { EnemyState, EnemyType } from '../domain/entities/EnemyEntity';
+import { PlayerAnimation } from '../domain/entities/PlayerEntity';
 import { DomainEvent } from '../domain/events/DomainEvents';
 import { Direction } from '../domain/value-objects/Transform';
 import { Vector2 } from '../domain/value-objects/Vector2';
@@ -20,6 +21,7 @@ export interface RenderProjection {
     readonly facing: Direction;
     readonly currentHealth: number;
     readonly maxHealth: number;
+    readonly animation: PlayerAnimation;
     readonly isAttacking: boolean;
     readonly isInvulnerable: boolean;
     readonly isDead: boolean;
@@ -37,4 +39,22 @@ export interface RenderProjection {
     readonly elapsedTimeSeconds: number;
   };
   readonly recentEvents: readonly DomainEvent[];
+}
+
+/**
+ * Throttled UI-only projection consumed by React HUD components.
+ * Emitted at a controlled cadence (e.g. 10 Hz) or on discrete events,
+ * preventing per-frame React state re-renders.
+ */
+export interface UiProjection {
+  readonly playerHealth: number;
+  readonly playerMaxHealth: number;
+  readonly playerCoords: Vector2;
+  readonly playerFacing: Direction;
+  readonly isDead: boolean;
+  readonly isPaused: boolean;
+  readonly mapName: string;
+  readonly aliveEnemyCount: number;
+  readonly totalSteps: number;
+  readonly elapsedTimeSeconds: number;
 }

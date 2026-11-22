@@ -1,13 +1,19 @@
 import { TouchInputAdapter } from '../../input/TouchInputAdapter';
-import { EnemyRenderItem, RenderProjection } from '../application/GameProjection';
+import {
+  EnemyRenderItem,
+  RenderProjection,
+  UiProjection,
+} from '../application/GameProjection';
 import {
   EnemyEntity,
   createEnemyEntity,
   updateEnemy,
 } from '../domain/entities/EnemyEntity';
 import {
+  PlayerAnimation,
   PlayerEntity,
   createPlayerEntity,
+  updatePlayerAnimation,
   updatePlayerTransform,
 } from '../domain/entities/PlayerEntity';
 import { DomainEvent } from '../domain/events/DomainEvents';
@@ -30,14 +36,21 @@ import { GameLoop } from './GameLoop';
 import { GameSession } from './GameSession';
 
 export type ProjectionListener = (projection: RenderProjection) => void;
+export type UiListener = (ui: UiProjection) => void;
+
+export const WALK_FRAME_DURATION_MS = 120;
+export const UI_THROTTLE_INTERVAL_MS = 100; // 10 Hz controlled cadence for React HUD
 
 export class GameRuntime {
   private session: GameSession;
   private loop: GameLoop;
   private inputAdapter: TouchInputAdapter;
-  private listeners = new Set<ProjectionListener>();
+  private renderListeners = new Set<ProjectionListener>();
+  private uiListeners = new Set<{ listener: UiListener; intervalMs: number }>();
   private isDisposed = false;
   private hasProcessedPlayerAttackHit = false;
+  private lastUiPublishMs = 0;
+  private cachedProjection: RenderProjection | null = null;
 
   constructor(
     saveSlotId: string,
@@ -98,7 +111,7 @@ export class GameRuntime {
 
     this.loop = new GameLoop({
       onFixedUpdate: (deltaSeconds) => this.fixedUpdate(deltaSeconds),
-      onRender: () => this.publishProjection(),
+      onRender: () => this.publishRender(),
     });
   }
 
@@ -121,27 +134,31 @@ export class GameRuntime {
   setViewportDimensions(width: number, height: number): void {
     if (this.isDisposed) return;
     this.session.camera.setDimensions(width, height);
-    this.publishProjection();
+    this.cachedProjection = null;
+    this.publishRender();
   }
 
   start(scheduler?: (cb: (timeMs: number) => void) => number): void {
     if (this.isDisposed) return;
     this.session.isPaused = false;
     this.loop.start(scheduler);
+    this.publishUi(true);
   }
 
   pause(): void {
     if (this.isDisposed) return;
     this.session.isPaused = true;
     this.loop.pause();
-    this.publishProjection();
+    this.publishRender();
+    this.publishUi(true); // Immediate UI update on pause
   }
 
   resume(): void {
     if (this.isDisposed) return;
     this.session.isPaused = false;
     this.loop.resume();
-    this.publishProjection();
+    this.publishRender();
+    this.publishUi(true); // Immediate UI update on resume
   }
 
   stop(canceller?: (id: number) => void): void {
@@ -153,15 +170,32 @@ export class GameRuntime {
   dispose(): void {
     if (this.isDisposed) return;
     this.stop();
-    this.listeners.clear();
+    this.renderListeners.clear();
+    this.uiListeners.clear();
     this.isDisposed = true;
   }
 
+  /**
+   * High-frequency render projection subscription for canvas redraws.
+   */
   subscribe(listener: ProjectionListener): () => void {
-    this.listeners.add(listener);
+    this.renderListeners.add(listener);
     listener(this.createProjection());
     return () => {
-      this.listeners.delete(listener);
+      this.renderListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Controlled cadence UI-only subscription for React HUD components.
+   * Prevents per-frame React setState updates by throttling.
+   */
+  subscribeUI(listener: UiListener, intervalMs = UI_THROTTLE_INTERVAL_MS): () => void {
+    const entry = { listener, intervalMs };
+    this.uiListeners.add(entry);
+    listener(this.createUiProjection());
+    return () => {
+      this.uiListeners.delete(entry);
     };
   }
 
@@ -181,6 +215,13 @@ export class GameRuntime {
       DEFAULT_PLAYER_ATTACK.activeMs +
       DEFAULT_PLAYER_ATTACK.recoveryMs;
     this.hasProcessedPlayerAttackHit = false;
+
+    this.session.player = updatePlayerAnimation(this.session.player, {
+      state: 'attack',
+      frame: 0,
+      timerMs: 0,
+    });
+
     return true;
   }
 
@@ -189,11 +230,13 @@ export class GameRuntime {
     this.session.player = {
       ...this.session.player,
       currentHealth: newHealth,
+      animation: newHealth <= 0 ? { state: 'dead', frame: 0, timerMs: 0 } : this.session.player.animation,
     };
     this.session.eventQueue.push({ type: 'PLAYER_DAMAGED', amount, sourceId });
     if (newHealth <= 0) {
       this.session.eventQueue.push({ type: 'PLAYER_DIED' });
     }
+    this.publishUi(true); // Immediate update on damage
   }
 
   respawnPlayer(): void {
@@ -224,10 +267,12 @@ export class GameRuntime {
     this.session.camera.followTarget(respawnPos);
     this.session.eventQueue.push({ type: 'PLAYER_RESPAWNED', position: respawnPos });
 
+    this.cachedProjection = null;
     if (this.session.isPaused) {
       this.resume();
     } else {
-      this.publishProjection();
+      this.publishRender();
+      this.publishUi(true);
     }
   }
 
@@ -253,6 +298,7 @@ export class GameRuntime {
         facing: this.session.player.transform.facing,
         currentHealth: this.session.player.currentHealth,
         maxHealth: this.session.player.stats.maxHealth,
+        animation: this.session.player.animation,
         isAttacking: this.session.playerAttackTimerMs > 0,
         isInvulnerable: nowMs < this.session.playerInvulnerableUntilMs,
         isDead: this.session.player.currentHealth <= 0,
@@ -273,6 +319,26 @@ export class GameRuntime {
     });
   }
 
+  createUiProjection(): UiProjection {
+    let aliveCount = 0;
+    for (const enemy of this.session.enemies.values()) {
+      if (enemy.state !== 'dead') aliveCount++;
+    }
+
+    return Object.freeze({
+      playerHealth: this.session.player.currentHealth,
+      playerMaxHealth: this.session.player.stats.maxHealth,
+      playerCoords: this.session.player.transform.position,
+      playerFacing: this.session.player.transform.facing,
+      isDead: this.session.player.currentHealth <= 0,
+      isPaused: this.session.isPaused,
+      mapName: this.session.map.name,
+      aliveEnemyCount: aliveCount,
+      totalSteps: this.loop.steps,
+      elapsedTimeSeconds: this.session.elapsedTimeSeconds,
+    });
+  }
+
   /**
    * Deterministic simulation fixed update step.
    */
@@ -285,6 +351,13 @@ export class GameRuntime {
 
     // Check player death
     if (this.session.player.currentHealth <= 0) {
+      if (this.session.player.animation.state !== 'dead') {
+        this.session.player = updatePlayerAnimation(this.session.player, {
+          state: 'dead',
+          frame: 0,
+          timerMs: 0,
+        });
+      }
       return;
     }
 
@@ -300,6 +373,8 @@ export class GameRuntime {
     }
 
     // 2. Resolve Player Movement with solid wall collision & sliding
+    const isMoving = inputSnapshot.moveVector.x !== 0 || inputSnapshot.moveVector.y !== 0;
+
     if (this.session.playerAttackTimerMs <= 0) {
       const intendedTransform = applyMovementStep({
         currentTransform: this.session.player.transform,
@@ -320,9 +395,30 @@ export class GameRuntime {
         10
       );
 
-      this.session.player = updatePlayerTransform(
-        this.session.player,
-        createTransform(resolvedPos, intendedTransform.facing)
+      // Update Player Animation State (Walk cycle)
+      let newAnim: PlayerAnimation;
+      const isInvulnerable = nowMs < this.session.playerInvulnerableUntilMs;
+
+      if (isInvulnerable) {
+        newAnim = { state: 'hurt', frame: 0, timerMs: 0 };
+      } else if (isMoving) {
+        const nextTimer = this.session.player.animation.timerMs + deltaMs;
+        const currentFrame = Math.floor(nextTimer / WALK_FRAME_DURATION_MS) % 4;
+        newAnim = {
+          state: 'walk',
+          frame: currentFrame,
+          timerMs: nextTimer,
+        };
+      } else {
+        newAnim = { state: 'idle', frame: 0, timerMs: 0 };
+      }
+
+      this.session.player = updatePlayerAnimation(
+        updatePlayerTransform(
+          this.session.player,
+          createTransform(resolvedPos, intendedTransform.facing)
+        ),
+        newAnim
       );
     }
 
@@ -351,6 +447,11 @@ export class GameRuntime {
       if (this.session.playerAttackTimerMs <= 0) {
         this.session.playerAttackTimerMs = 0;
         this.session.playerAttackCooldownMs = DEFAULT_PLAYER_ATTACK.cooldownMs;
+        this.session.player = updatePlayerAnimation(this.session.player, {
+          state: 'idle',
+          frame: 0,
+          timerMs: 0,
+        });
       }
     }
 
@@ -381,6 +482,14 @@ export class GameRuntime {
       }
 
       this.session.enemies.set(id, updatedEnemy);
+    }
+
+    // Invalidate cached render projection
+    this.cachedProjection = null;
+
+    // Check throttled UI publication
+    if (nowMs - this.lastUiPublishMs >= UI_THROTTLE_INTERVAL_MS) {
+      this.publishUi(false);
     }
   }
 
@@ -444,6 +553,8 @@ export class GameRuntime {
             xpReward: enemy.stats.xpReward,
           });
         }
+
+        this.publishUi(true); // Immediate UI update on enemy damage/defeat
       }
     }
   }
@@ -487,6 +598,7 @@ export class GameRuntime {
         ...this.session.player,
         currentHealth: newHealth,
         transform: createTransform(resolvedKnockback, this.session.player.transform.facing),
+        animation: isDead ? { state: 'dead', frame: 0, timerMs: 0 } : { state: 'hurt', frame: 0, timerMs: 0 },
       };
 
       this.session.playerInvulnerableUntilMs = nowMs + 400; // 400ms i-frame
@@ -500,14 +612,31 @@ export class GameRuntime {
       if (isDead) {
         this.session.eventQueue.push({ type: 'PLAYER_DIED' });
       }
+
+      this.publishUi(true); // Immediate UI update on player damage/death
     }
   }
 
-  private publishProjection(): void {
-    if (this.listeners.size === 0 || this.isDisposed) return;
+  private publishRender(): void {
+    if (this.renderListeners.size === 0 || this.isDisposed) return;
     const proj = this.createProjection();
-    for (const listener of this.listeners) {
+    for (const listener of this.renderListeners) {
       listener(proj);
+    }
+  }
+
+  private publishUi(force = false): void {
+    if (this.uiListeners.size === 0 || this.isDisposed) return;
+    const nowMs = this.session.elapsedTimeSeconds * 1000;
+
+    if (!force && nowMs - this.lastUiPublishMs < UI_THROTTLE_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastUiPublishMs = nowMs;
+    const ui = this.createUiProjection();
+    for (const { listener } of this.uiListeners) {
+      listener(ui);
     }
   }
 }

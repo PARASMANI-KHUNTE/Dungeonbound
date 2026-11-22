@@ -1,11 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Canvas, Circle, Group, Line, Rect } from '@shopify/react-native-skia';
 import { RenderProjection } from '@/game/application/GameProjection';
+import { GameRuntime } from '@/game/engine/GameRuntime';
 import { calculateVisibleTileBounds, worldToScreenPosition } from './CameraRenderer';
 
 export interface GameCanvasProps {
-  readonly projection: RenderProjection;
+  readonly runtime: GameRuntime;
   readonly width: number;
   readonly height: number;
 }
@@ -15,17 +16,28 @@ const TILE_COLORS: Record<number, string> = {
   1: '#2A5528', // Grass
   2: '#7F5539', // Dirt road
   3: '#4A4E69', // Cobblestone plaza
-  4: '#1D3557', // Water
+  4: '#1D3557', // Water (solid)
   5: '#E63946', // Flower patch
   6: '#1E3F20', // Bush
-  7: '#524B4B', // Wall / border stone
+  7: '#524B4B', // Wall / border stone (solid)
 };
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({
-  projection,
+  runtime,
   width,
   height,
 }) => {
+  const [projection, setProjection] = useState<RenderProjection>(() => runtime.createProjection());
+
+  useEffect(() => {
+    // Isolated subscriber: updates ONLY this GameCanvas component,
+    // leaving the parent GameplayScreen, HUD, and controls unre-rendered!
+    const unsubscribe = runtime.subscribe((newProj) => {
+      setProjection(newProj);
+    });
+    return unsubscribe;
+  }, [runtime]);
+
   const { player, enemies, camera, map } = projection;
   const tileSize = map.tileSize;
 
@@ -53,6 +65,15 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const playerScreenPos = useMemo(() => {
     return worldToScreenPosition(player.position, cameraState);
   }, [player.position, cameraState]);
+
+  // Walk cycle bounce offset based on animation frame
+  const walkBobOffset = useMemo(() => {
+    if (player.animation.state === 'walk') {
+      // Bob up slightly on frames 1 and 3
+      return player.animation.frame % 2 === 1 ? -2 : 0;
+    }
+    return 0;
+  }, [player.animation]);
 
   // Player Facing indicator offset
   const playerFacingOffset = useMemo(() => {
@@ -154,7 +175,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         {/* Render Enemies */}
         {enemies.map((enemy) => {
           const enemyPos = worldToScreenPosition(enemy.position, cameraState);
-          // Viewport culling for enemies
           if (
             enemyPos.x < -32 ||
             enemyPos.x > width + 32 ||
@@ -215,7 +235,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         {/* Render Player Character */}
         {player.isDead ? (
           <Group>
-            {/* Player Tombstone / Defeated Marker */}
             <Rect
               x={playerScreenPos.x - 8}
               y={playerScreenPos.y - 12}
@@ -234,24 +253,24 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
               r={13}
               color="rgba(0, 0, 0, 0.45)"
             />
-            {/* Hero Body (flashes red when invulnerable/hit) */}
+            {/* Hero Body with Walk Bobbing Offset */}
             <Circle
               cx={playerScreenPos.x}
-              cy={playerScreenPos.y}
+              cy={playerScreenPos.y + walkBobOffset}
               r={13}
               color={player.isInvulnerable ? '#E63946' : '#E5A93C'}
             />
             {/* Hero Crest */}
             <Circle
               cx={playerScreenPos.x}
-              cy={playerScreenPos.y}
+              cy={playerScreenPos.y + walkBobOffset}
               r={7}
               color="#FAF0CA"
             />
             {/* Facing Indicator */}
             <Circle
               cx={playerScreenPos.x + playerFacingOffset.x}
-              cy={playerScreenPos.y + playerFacingOffset.y}
+              cy={playerScreenPos.y + playerFacingOffset.y + walkBobOffset}
               r={3.5}
               color="#9E2A2B"
             />

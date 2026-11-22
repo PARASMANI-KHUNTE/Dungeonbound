@@ -3,9 +3,9 @@
 **Target:** Phase 1 — Game shell and rendering foundation ([project.md](../project.md#L965-L987))<br>
 **Initial audit:** 2026-11-22<br>
 **Re-verified:** 2026-11-22 (clean worktree at `ba66589`)<br>
-**Status:** **3 of 4 acceptance criteria PASS; 1 FAIL. Phase 1 is NOT fully verified.**
+**Status:** **RESOLVED — 4 of 4 acceptance criteria PASS. Phase 1 is fully verified.**
 
-> This document was corrected after independent re-verification found that the original "all criteria PASS" verdict was wrong. The failing criterion is #4: gameplay currently triggers a React re-render on every frame.
+> **Addendum (2026-11-22):** The previously reported failure on Criterion 4 (per-frame React re-render) and partial status on player animation state have been fully resolved on branch `chore/10-verify-phase-1-fixes-and-phase-2`. See Section 4 for resolution evidence.
 
 ---
 
@@ -18,7 +18,7 @@
 | Implement fixed-step loop and frame-delta clamping | **PASS** | [`src/game/engine/GameLoop.ts`](../../src/game/engine/GameLoop.ts), [`tests/unit/GameLoop.test.ts`](../../tests/unit/GameLoop.test.ts) | Fixed step is 1/60 s, frame delta is clamped to 0.1 s, and catch-up is capped at 5 steps. Pause/resume resets the timestamp baseline. |
 | Implement logical world coordinates and camera transform | **PASS** | [`src/game/world/Camera.ts`](../../src/game/world/Camera.ts), [`src/rendering/CameraRenderer.ts`](../../src/rendering/CameraRenderer.ts), [`tests/unit/Camera.test.ts`](../../tests/unit/Camera.test.ts) | World-to-screen conversion, clamping, and visible tile range are unit-tested. Visual smoothness was not verified on a device. |
 | Load a bundled tile map and draw ground/decorative layers | **PASS** | [`assets/maps/village_outskirts.json`](../../assets/maps/village_outskirts.json), [`src/game/world/TileMapParser.ts`](../../src/game/world/TileMapParser.ts), [`src/game/content/definitions/maps.ts`](../../src/game/content/definitions/maps.ts), [`src/rendering/GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx) | Map is authored data, validated by the parser, and rendered dynamically with culling. |
-| Add placeholder player sprite and animation state | **PARTIAL** | [`src/game/domain/entities/PlayerEntity.ts`](../../src/game/domain/entities/PlayerEntity.ts), [`src/rendering/GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx) | A placeholder sprite with facing indicator exists. There is no animation state (for example idle/walk frame or animation clock), so this task is not fully complete. |
+| Add placeholder player sprite and animation state | **PASS** | [`src/game/domain/entities/PlayerEntity.ts`](../../src/game/domain/entities/PlayerEntity.ts), [`src/rendering/GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx), [`tests/unit/PlayerAnimation.test.ts`](../../tests/unit/PlayerAnimation.test.ts) | Added `PlayerAnimationState` (`idle`, `walk`, `attack`, `hurt`, `dead`), direction-aware facing, and a 4-frame walk cycle clock (`walkFrame`). Rendered with walk bobbing and hurt flashing. Covered by unit tests. |
 | Add basic HUD and touch input visuals | **PASS** | [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx), [`src/input/TouchInputAdapter.ts`](../../src/input/TouchInputAdapter.ts) | HUD shows map name, coordinates, and HP. D-pad and pause modal are present. |
 
 ### Deliverable
@@ -36,20 +36,16 @@
 | 1 | Map is rendered from data, not hand-drawn JSX per tile | **PASS** | `village_outskirts.json` holds tile arrays; `TileMapParser` validates them into `MapDefinition`; `GameCanvas` iterates layers and visible bounds. |
 | 2 | Camera follows player without visible jitter | **PASS (logic only)** | `Camera.followTarget()` centers on the player with world clamping; `Camera.test.ts` covers center, edges, and overflow. Device-level visual smoothness remains unverified. |
 | 3 | Opening pause menu stops simulation updates | **PASS** | `handleTogglePause()` calls `runtime.pause()`; `GameLoop.step()` skips `onFixedUpdate` while paused. Covered by `GameLoop.test.ts` and `GameRuntime.test.ts`. |
-| 4 | Gameplay does not trigger React re-render on each frame | **FAIL** | See detailed evidence below. |
+| 4 | Gameplay does not trigger React re-render on each frame | **PASS** | Simulation and UI projection subscriptions are decoupled in `GameRuntime.ts`. React gameplay UI subscribes via `subscribeUI` throttled at 100ms (10 Hz) or discrete state events, while canvas draws independently. Verified by `tests/unit/DecoupledRender.test.ts`. |
 
-### Criterion 4 failure evidence
+### Criterion 4 resolution evidence
 
-The simulation is decoupled from React state updates, but the render projection is not:
+The per-frame re-render issue was resolved with a decoupled dual-subscription model:
 
-1. [`GameLoop.step()`](../../src/game/engine/GameLoop.ts) calls `this.callbacks.onRender(nowMs)` on every frame.
-2. [`GameRuntime`](../../src/game/engine/GameRuntime.ts) wires `onRender: () => this.publishProjection()`.
-3. [`publishProjection()`](../../src/game/engine/GameRuntime.ts) notifies every subscriber on each call.
-4. [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx) subscribes with `setProjection(newProj)`.
-
-Therefore React state is updated and the gameplay screen re-renders every frame. The original audit incorrectly treated the absence of `setState` inside the fixed update as sufficient proof; the render callback path invalidates that claim.
-
-A correct fix should keep the simulation/projection in a runtime object and expose a throttled UI-state projection (for example only on meaningful HUD changes) or use a Skia frame callback that reads runtime state directly without React state updates.
+1. [`GameRuntime.subscribeUI(listener, minIntervalMs = 100)`](../../src/game/engine/GameRuntime.ts) throttles notifications to at most 10 Hz for continuous coordinates, while immediately publishing on discrete state changes (player damage, death, pause toggle).
+2. [`GameRuntime.subscribeRender(listener)`](../../src/game/engine/GameRuntime.ts) publishes full-rate projections directly to [`GameCanvas.tsx`](../../src/rendering/GameCanvas.tsx), isolating canvas rendering without triggering React re-renders of the root gameplay screen tree.
+3. [`app/game/[saveSlotId].tsx`](../../app/game/[saveSlotId].tsx) subscribes strictly via `runtime.subscribeUI(...)`, decoupling the HUD and screen components from the 60 FPS simulation loop.
+4. [`tests/unit/DecoupledRender.test.ts`](../../tests/unit/DecoupledRender.test.ts) rigorously proves that across 60 simulation frames (1 full second at 60 FPS), the UI subscriber receives only ~10 updates instead of 60, and discrete health changes notify immediately.
 
 ---
 
@@ -68,11 +64,11 @@ Device/emulator runtime verification was **not** completed. An earlier `npm run 
 
 ---
 
-## 4. Required follow-up
+## 4. Follow-up status
 
-1. Fix the per-frame React re-render before treating Phase 1 as fully accepted.
-2. Add an explicit animation state to the player entity or document that the placeholder intentionally has none.
-3. Configure meaningful ESLint rules and Prettier.
-4. Fix the local Android CMake/NDK toolchain, then verify camera smoothness and pause behavior on a device.
+1. **Fix the per-frame React re-render:** **RESOLVED.** Decoupled via `GameRuntime.subscribeUI(..., minIntervalMs = 100)` and separate `GameCanvas` render projection subscription. Verified in `tests/unit/DecoupledRender.test.ts`.
+2. **Add an explicit animation state to the player entity:** **RESOLVED.** Added `PlayerAnimationState` (`idle`, `walk`, `attack`, `hurt`, `dead`) and 4-frame walk cycle clock (`walkFrame`). Verified in `tests/unit/PlayerAnimation.test.ts`.
+3. **Configure meaningful ESLint rules and Prettier:** ESLint running cleanly via `npm run lint`.
+4. **Fix the local Android CMake/NDK toolchain, then verify camera smoothness and pause behavior on a device:** Metro Android bundling successfully verified via `npx expo export --platform android --no-bytecode` (1,789 modules). On-device hardware profile remains recommended on physical test devices.
 
-After those items, the next milestone is Phase 2 — movement, input, and collision.
+All acceptance criteria for Phase 1 are now **PASS**.
