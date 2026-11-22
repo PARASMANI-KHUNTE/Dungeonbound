@@ -17,6 +17,7 @@ import { UiProjection } from '@/game/application/GameProjection';
 import { VirtualJoystick } from '@/input/VirtualJoystick';
 import { Vector2 } from '@/game/domain/value-objects/Vector2';
 import { VILLAGE_OUTSKIRTS_MAP } from '@/game/content/definitions/maps';
+import { InventoryModal } from '@/ui/components/InventoryModal';
 
 export default function GameplayScreen() {
   const router = useRouter();
@@ -26,6 +27,7 @@ export default function GameplayScreen() {
   const runtimeRef = useRef<GameRuntime | null>(null);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [controlMode, setControlMode] = useState<'JOYSTICK' | 'DPAD'>('JOYSTICK');
+  const [inventoryVisible, setInventoryVisible] = useState(false);
 
   // Throttled UI State (10 Hz cadence or on discrete events - NO 60 FPS React re-renders!)
   const [uiState, setUiState] = useState<UiProjection | null>(null);
@@ -167,11 +169,22 @@ export default function GameplayScreen() {
               />
             </View>
             <Text style={styles.hpText}>
-              HP: {playerHealth}/{playerMaxHealth} • Goblins: {aliveEnemyCount}
+              Lvl {uiState.playerLevel} • HP: {playerHealth}/{playerMaxHealth} • Goblins: {aliveEnemyCount}
             </Text>
           </View>
 
           <View style={styles.topButtons}>
+            <TouchableOpacity
+              style={styles.inventoryBtn}
+              onPress={() => {
+                runtimeRef.current?.pause();
+                setInventoryVisible(true);
+              }}
+              accessibilityLabel="Open Inventory"
+            >
+              <Text style={styles.inventoryBtnText}>🎒 BAG</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.controlModeBtn} onPress={handleToggleControlMode}>
               <Text style={styles.controlModeBtnText}>
                 {controlMode === 'JOYSTICK' ? '🕹️ STICK' : '🎛️ D-PAD'}
@@ -183,6 +196,13 @@ export default function GameplayScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Floating Notification Banner */}
+        {uiState.notificationMessage && (
+          <View style={styles.notificationBanner}>
+            <Text style={styles.notificationText}>{uiState.notificationMessage}</Text>
+          </View>
+        )}
 
         {/* Touch Controls Overlay: Left Movement, Right Action */}
         <View style={styles.controlsOverlay} pointerEvents="box-none">
@@ -246,8 +266,16 @@ export default function GameplayScreen() {
           </View>
         </View>
 
+        {/* Inventory Modal */}
+        <InventoryModal
+          visible={inventoryVisible}
+          onClose={() => setInventoryVisible(false)}
+          runtime={runtimeRef.current}
+          uiState={uiState}
+        />
+
         {/* Pause Modal */}
-        <Modal visible={isPaused && !isDead} transparent animationType="fade">
+        <Modal visible={isPaused && !isDead && !inventoryVisible} transparent animationType="fade">
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>GAME PAUSED</Text>
@@ -377,6 +405,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  inventoryBtn: {
+    backgroundColor: '#27223D',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5A93C',
+    marginRight: 6,
+  },
+  inventoryBtnText: {
+    color: '#E5A93C',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
   controlModeBtn: {
     backgroundColor: '#27223D',
     paddingHorizontal: 10,
@@ -384,7 +426,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#4E4376',
-    marginRight: 8,
+    marginRight: 6,
   },
   controlModeBtnText: {
     color: '#E5A93C',
@@ -532,6 +574,26 @@ const styles = StyleSheet.create({
   modalBtnText: {
     color: '#FAF0CA',
     fontSize: 13,
+    fontWeight: 'bold',
+  },
+  notificationBanner: {
+    position: 'absolute',
+    top: 70,
+    alignSelf: 'center',
+    backgroundColor: '#1D3557',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#48CAE4',
+    shadowColor: '#000',
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    elevation: 6,
+  },
+  notificationText: {
+    color: '#FAF0CA',
+    fontSize: 11,
     fontWeight: 'bold',
   },
 });

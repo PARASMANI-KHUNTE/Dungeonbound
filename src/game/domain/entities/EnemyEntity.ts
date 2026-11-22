@@ -25,6 +25,7 @@ export interface EnemyEntity {
   readonly stateTimerMs: number;
   readonly attackCooldownRemainingMs: number;
   readonly invulnerableUntilMs: number;
+  readonly xpAwarded: boolean;
 }
 
 export function createEnemyEntity(
@@ -56,6 +57,7 @@ export function createEnemyEntity(
     stateTimerMs: 0,
     attackCooldownRemainingMs: 0,
     invulnerableUntilMs: 0,
+    xpAwarded: false,
   });
 }
 
