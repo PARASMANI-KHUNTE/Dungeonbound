@@ -1,6 +1,5 @@
 import { GameRuntime } from '@/game/engine/GameRuntime';
 import { parseTileMap } from '@/game/world/TileMapParser';
-import { createVector2 } from '@/game/domain/value-objects/Vector2';
 
 describe('Combat Integration', () => {
   const testMap = parseTileMap({

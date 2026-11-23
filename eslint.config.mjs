@@ -1,4 +1,6 @@
-export default [
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
   {
     ignores: [
       'node_modules/**',
@@ -12,4 +14,18 @@ export default [
       'jest.config.js',
     ],
   },
-];
+  ...tseslint.configs.recommended,
+  {
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-require-imports': 'off',
+      'prefer-const': 'error',
+      'no-debugger': 'error',
+      'no-var': 'error',
+    },
+  }
+);

@@ -69,6 +69,7 @@ export default function GameplayScreen() {
     const handleAppStateChange = async (nextState: AppStateStatus) => {
       if (nextState.match(/inactive|background/)) {
         runtime.pause();
+        runtime.input.reset();
         try {
           const repo = await getSaveRepository();
           const snapshot = runtime.createSaveSnapshot();
@@ -87,7 +88,7 @@ export default function GameplayScreen() {
       runtime.dispose();
       runtimeRef.current = null;
     };
-  }, [saveSlotId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [saveSlotId]);
 
   // Resize camera viewport on dimension change
   useEffect(() => {

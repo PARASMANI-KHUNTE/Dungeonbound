@@ -22,7 +22,6 @@ import {
   updatePlayerAnimation,
   updatePlayerTransform,
 } from '../domain/entities/PlayerEntity';
-import { DomainEvent } from '../domain/events/DomainEvents';
 import { EquipmentSlot } from '../domain/items/ItemTypes';
 import {
   DEFAULT_ENEMY_ATTACK,
@@ -164,6 +163,7 @@ export class GameRuntime {
   pause(): void {
     if (this.isDisposed) return;
     this.session.isPaused = true;
+    this.inputAdapter.reset();
     this.loop.pause();
     this.publishRender();
     this.publishUi(true);

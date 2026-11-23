@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Canvas, Circle, Group, Line, Rect } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, Rect, useCanvasRef } from '@shopify/react-native-skia';
 import { RenderProjection } from '@/game/application/GameProjection';
 import { GameRuntime } from '@/game/engine/GameRuntime';
 import { calculateVisibleTileBounds, worldToScreenPosition } from './CameraRenderer';
@@ -27,17 +27,20 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   width,
   height,
 }) => {
-  const [projection, setProjection] = useState<RenderProjection>(() => runtime.createProjection());
+  const canvasRef = useCanvasRef();
+  const projectionRef = useRef<RenderProjection>(runtime.createProjection());
 
   useEffect(() => {
-    // Isolated subscriber: updates ONLY this GameCanvas component,
-    // leaving the parent GameplayScreen, HUD, and controls unre-rendered!
+    // Decoupled imperative subscriber: updates projection reference and triggers
+    // Skia redraw imperatively WITHOUT triggering React reconciliation or setState per frame.
     const unsubscribe = runtime.subscribe((newProj) => {
-      setProjection(newProj);
+      projectionRef.current = newProj;
+      canvasRef.current?.redraw();
     });
     return unsubscribe;
-  }, [runtime]);
+  }, [runtime, canvasRef]);
 
+  const projection = projectionRef.current;
   const { player, enemies, pickups, camera, map } = projection;
   const tileSize = map.tileSize;
 
@@ -159,7 +162,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
   return (
     <View style={[styles.container, { width, height }]}>
-      <Canvas style={{ width, height }}>
+      <Canvas ref={canvasRef} style={{ width, height }}>
         {/* Render visible map tiles */}
         {visibleTiles.map((tile) => (
           <Rect

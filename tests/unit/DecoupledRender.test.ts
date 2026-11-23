@@ -69,4 +69,24 @@ describe('DecoupledRender (No Per-Frame React Re-renders)', () => {
 
     runtime.dispose();
   });
+
+  it('proves GameCanvas render path uses imperative ref subscription and zero per-frame React useState', () => {
+    // Read the source of GameCanvas to assert architectural invariant:
+    // It must NOT contain useState for render projections
+    const fs = require('fs');
+    const path = require('path');
+    const gameCanvasSource = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/rendering/GameCanvas.tsx'),
+      'utf8'
+    );
+
+    // Must not use useState for frame projection updates
+    expect(gameCanvasSource).not.toMatch(/useState<RenderProjection>/);
+    expect(gameCanvasSource).not.toMatch(/setProjection\(/);
+
+    // Must use ref-based projection and useCanvasRef for decoupled drawing
+    expect(gameCanvasSource).toMatch(/useCanvasRef\(\)/);
+    expect(gameCanvasSource).toMatch(/projectionRef\.current/);
+    expect(gameCanvasSource).toMatch(/canvasRef\.current\?\.redraw\(\)/);
+  });
 });

@@ -31,7 +31,8 @@
     "@testing-library/react-native": "^14.1.0",
     "@types/react": "~19.3.0",
     "eslint": "^10.15.0",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0"
   },
   "private": true,
   "overrides": {

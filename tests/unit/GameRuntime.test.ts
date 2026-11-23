@@ -75,4 +75,36 @@ describe('GameRuntime', () => {
 
     runtime.dispose();
   });
+
+  it('resets touch input adapter to neutral on pause (app interruption)', () => {
+    const runtime = new GameRuntime('test_slot', testMap, 400, 300);
+    runtime.start(() => 0);
+
+    // Simulate active player movement and attack input before interruption
+    runtime.input.setMovement(0.8, -0.6);
+    runtime.input.setAttacking(true);
+
+    const activeSnapshot = runtime.input.readSnapshot();
+    expect(activeSnapshot.moveVector.x).toBeCloseTo(0.8);
+    expect(activeSnapshot.moveVector.y).toBeCloseTo(-0.6);
+    expect(activeSnapshot.isAttacking).toBe(true);
+
+    // Interruption / pause occurs
+    runtime.pause();
+
+    // Input must return to neutral
+    const neutralSnapshot = runtime.input.readSnapshot();
+    expect(neutralSnapshot.moveVector.x).toBe(0);
+    expect(neutralSnapshot.moveVector.y).toBe(0);
+    expect(neutralSnapshot.isAttacking).toBe(false);
+
+    // Resuming does not retain stale input vector
+    runtime.resume();
+    const resumeSnapshot = runtime.input.readSnapshot();
+    expect(resumeSnapshot.moveVector.x).toBe(0);
+    expect(resumeSnapshot.moveVector.y).toBe(0);
+    expect(resumeSnapshot.isAttacking).toBe(false);
+
+    runtime.dispose();
+  });
 });
